@@ -1,0 +1,215 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: logstreams.kubernetes.auth0.com
+spec:
+  group: kubernetes.auth0.com
+  names:
+    kind: LogStream
+    listKind: LogStreamList
+    plural: logstreams
+    singular: logstream
+    shortNames:
+      - a0ls
+  scope: Namespaced
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required:
+                - tenantRef
+                - conf
+              properties:
+                policy:
+                  type: array
+                  items:
+                    type: string
+                    enum:
+                      - Create
+                      - Update
+                      - Delete
+                tenantRef:
+                  type: object
+                  required:
+                    - name
+                  properties:
+                    namespace:
+                      type: string
+                    name:
+                      type: string
+                find:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                    name:
+                      type: string
+                init:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                conf:
+                  type: object
+                  properties:
+                    name:
+                      type: string
+                    type:
+                      type: string
+                      enum:
+                        - http
+                        - eventbridge
+                        - eventgrid
+                        - datadog
+                        - splunk
+                        - sumo
+                        - mixpanel
+                        - segment
+                    status:
+                      type: string
+                      enum:
+                        - active
+                        - paused
+                    filters:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          type:
+                            type: string
+                          name:
+                            type: string
+                    sink:
+                      type: object
+                      properties:
+                        http:
+                          type: object
+                          properties:
+                            httpEndpoint:
+                              type: string
+                            httpContentType:
+                              type: string
+                            httpContentFormat:
+                              type: string
+                            httpAuthorizationSecretRef:
+                              type: object
+                              properties:
+                                name:
+                                  type: string
+                                key:
+                                  type: string
+                            httpCustomHeaders:
+                              type: array
+                              items:
+                                type: object
+                                properties:
+                                  name:
+                                    type: string
+                                  value:
+                                    type: string
+                        eventBridge:
+                          type: object
+                          properties:
+                            awsAccountId:
+                              type: string
+                            awsRegion:
+                              type: string
+                        eventGrid:
+                          type: object
+                          properties:
+                            azureSubscriptionId:
+                              type: string
+                            azureResourceGroup:
+                              type: string
+                            azureRegion:
+                              type: string
+                            azurePartnerTopic:
+                              type: string
+                        datadog:
+                          type: object
+                          properties:
+                            datadogRegion:
+                              type: string
+                            datadogApiKeySecretRef:
+                              type: object
+                              properties:
+                                name:
+                                  type: string
+                                key:
+                                  type: string
+                        splunk:
+                          type: object
+                          properties:
+                            splunkDomain:
+                              type: string
+                            splunkPort:
+                              type: string
+                            splunkTokenSecretRef:
+                              type: object
+                              properties:
+                                name:
+                                  type: string
+                                key:
+                                  type: string
+                            splunkSecure:
+                              type: boolean
+                        sumo:
+                          type: object
+                          properties:
+                            sumoSourceAddress:
+                              type: string
+                        mixpanel:
+                          type: object
+                          properties:
+                            mixpanelRegion:
+                              type: string
+                            mixpanelProjectId:
+                              type: string
+                            mixpanelServiceAccountSecretRef:
+                              type: object
+                              properties:
+                                name:
+                                  type: string
+                                key:
+                                  type: string
+                        segment:
+                          type: object
+                          properties:
+                            segmentWriteKeySecretRef:
+                              type: object
+                              properties:
+                                name:
+                                  type: string
+                                key:
+                                  type: string
+            status:
+              type: object
+              properties:
+                id:
+                  type: string
+                currentStatus:
+                  type: string
+                type:
+                  type: string
+                lastConf:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Id
+          type: string
+          jsonPath: .status.id
+        - name: Type
+          type: string
+          jsonPath: .status.type
+        - name: Status
+          type: string
+          jsonPath: .status.currentStatus
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp

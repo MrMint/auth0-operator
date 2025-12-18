@@ -33,6 +33,10 @@ Since the entire API is derived from the Auth0 Management API their documentatio
 - [x] kubernetes.auth0.com/v1:ClientGrant `a0cgr`
 - [x] kubernetes.auth0.com/v1:ResourceServer `a0api`
 - [x] kubernetes.auth0.com/v1:Connection `a0con`
+- [x] kubernetes.auth0.com/v1:Auth0Role `a0role`
+- [x] kubernetes.auth0.com/v1:RolePermission `a0rp`
+- [x] kubernetes.auth0.com/v1:LogStream `a0ls`
+- [x] kubernetes.auth0.com/v1:EventStream `a0es` *(Beta - Auth0 Early Access API)*
 
 ## Examples
 
@@ -123,4 +127,218 @@ spec:
     audience:
       name: example-api
     scope: []
+```
+
+### Auth0Role
+
+Manages Auth0 roles for RBAC. Roles are containers for permissions that can be assigned to users.
+
+https://auth0.com/docs/manage-users/access-control/rbac
+
+```yaml
+apiVersion: kubernetes.auth0.com/v1
+kind: Auth0Role
+metadata:
+  name: admin-role
+  namespace: example
+spec:
+  tenantRef:
+    name: example-tenant
+  policy:
+    - Create
+    - Update
+    - Delete
+  find:
+    nameFilter: Admin  # Optional: find existing role by name
+  conf:
+    name: Admin
+    description: Administrator role with full access
+```
+
+### RolePermission
+
+Assigns permissions from a ResourceServer (API) to a Role. This solves the CloudFormation 4096-byte response limit by managing permissions separately from roles.
+
+> **Note:** RolePermission handles large permission sets (60+) that exceed CloudFormation limits by managing them independently.
+
+```yaml
+apiVersion: kubernetes.auth0.com/v1
+kind: RolePermission
+metadata:
+  name: admin-api-permissions
+  namespace: example
+spec:
+  tenantRef:
+    name: example-tenant
+  roleRef:
+    name: admin-role
+  resourceServerRef:
+    name: example-api
+    # Or use identifier directly:
+    # identifier: https://example.com/api
+  policy:
+    - Create
+    - Update
+    - Delete
+  conf:
+    permissions:
+      - read:users
+      - write:users
+      - delete:users
+      - read:settings
+      - write:settings
+```
+
+### LogStream
+
+Configures log streaming to external destinations. Supports 8 destination types.
+
+https://auth0.com/docs/customize/log-streams
+
+**Supported Types:** `http`, `eventbridge`, `eventgrid`, `datadog`, `splunk`, `sumo`, `mixpanel`, `segment`
+
+#### HTTP Webhook Example
+
+```yaml
+apiVersion: kubernetes.auth0.com/v1
+kind: LogStream
+metadata:
+  name: logs-to-webhook
+  namespace: example
+spec:
+  tenantRef:
+    name: example-tenant
+  policy:
+    - Create
+    - Update
+    - Delete
+  conf:
+    name: Webhook Log Stream
+    type: http
+    status: active
+    filters:
+      - type: category
+        name: auth.login.success
+    sink:
+      http:
+        httpEndpoint: https://logs.example.com/auth0
+        httpContentType: application/json
+        httpContentFormat: JSONLINES
+        httpAuthorizationSecretRef:
+          name: logstream-auth-secret
+          key: authorization
+```
+
+#### AWS EventBridge Example
+
+```yaml
+apiVersion: kubernetes.auth0.com/v1
+kind: LogStream
+metadata:
+  name: logs-to-eventbridge
+  namespace: example
+spec:
+  tenantRef:
+    name: example-tenant
+  conf:
+    name: EventBridge Log Stream
+    type: eventbridge
+    status: active
+    sink:
+      eventBridge:
+        awsAccountId: "123456789012"
+        awsRegion: us-east-1
+```
+
+#### Datadog Example
+
+```yaml
+apiVersion: kubernetes.auth0.com/v1
+kind: LogStream
+metadata:
+  name: logs-to-datadog
+  namespace: example
+spec:
+  tenantRef:
+    name: example-tenant
+  conf:
+    name: Datadog Log Stream
+    type: datadog
+    status: active
+    sink:
+      datadog:
+        datadogRegion: us
+        datadogApiKeySecretRef:
+          name: datadog-secret
+          key: api-key
+```
+
+### EventStream (Beta)
+
+Subscribes to Auth0 lifecycle events via CloudEvents. This is an **Early Access API** from Auth0.
+
+https://auth0.com/docs/customize/integrations/event-streams
+
+> **Warning:** The Auth0 EventStreams API is in Early Access and may change. Use with caution in production.
+
+**Supported Event Types:**
+- User: `user.created`, `user.updated`, `user.deleted`
+- Organization: `organization.created`, `organization.updated`, `organization.deleted`
+- Organization Members: `organization.member.added`, `organization.member.deleted`, `organization.member.role.assigned`, `organization.member.role.deleted`
+- Organization Connections: `organization.connection.added`, `organization.connection.updated`, `organization.connection.removed`
+
+#### Webhook Example
+
+```yaml
+apiVersion: kubernetes.auth0.com/v1
+kind: EventStream
+metadata:
+  name: user-events-webhook
+  namespace: example
+spec:
+  tenantRef:
+    name: example-tenant
+  policy:
+    - Create
+    - Update
+    - Delete
+  conf:
+    name: User Events Stream
+    type: webhook
+    status: active
+    subscriptions:
+      - eventType: user.created
+      - eventType: user.updated
+      - eventType: user.deleted
+    sink:
+      webhook:
+        url: https://events.example.com/auth0
+        authorizationSecretRef:
+          name: eventstream-auth-secret
+          key: bearer-token
+```
+
+#### AWS EventBridge Example
+
+```yaml
+apiVersion: kubernetes.auth0.com/v1
+kind: EventStream
+metadata:
+  name: org-events-eventbridge
+  namespace: example
+spec:
+  tenantRef:
+    name: example-tenant
+  conf:
+    name: Organization Events Stream
+    type: eventbridge
+    status: active
+    subscriptions:
+      - eventType: organization.created
+      - eventType: organization.member.added
+      - eventType: organization.member.deleted
+    sink:
+      eventBridge:
+        awsAccountId: "123456789012"
+        awsRegion: us-east-1
 ```

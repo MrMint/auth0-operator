@@ -11,6 +11,10 @@ resources:
 - connections_kubernetes_auth0_com.yaml
 - resourceservers_kubernetes_auth0_com.yaml
 - tenants_kubernetes_auth0_com.yaml
+- auth0roles_kubernetes_auth0_com.yaml
+- rolepermissions_kubernetes_auth0_com.yaml
+- logstreams_kubernetes_auth0_com.yaml
+- eventstreams_kubernetes_auth0_com.yaml
 - namespace.yaml
 images:
 - name: operator

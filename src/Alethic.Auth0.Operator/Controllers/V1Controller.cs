@@ -6,31 +6,32 @@ using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-
 using Alethic.Auth0.Operator.Core.Extensions;
 using Alethic.Auth0.Operator.Core.Models;
 using Alethic.Auth0.Operator.Models;
-
 using Auth0.AuthenticationApi;
 using Auth0.AuthenticationApi.Models;
 using Auth0.Core.Exceptions;
 using Auth0.ManagementApi;
-
 using k8s;
 using k8s.Models;
-
 using KubeOps.Abstractions.Controller;
 using KubeOps.Abstractions.Entities;
 using KubeOps.Abstractions.Queue;
 using KubeOps.KubernetesClient;
-
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
-
 using Newtonsoft.Json;
 
 namespace Alethic.Auth0.Operator.Controllers
 {
+    /// <summary>
+    /// Contains the API client and associated credentials for a tenant.
+    /// </summary>
+    /// <param name="Client">The Management API client instance.</param>
+    /// <param name="Token">The access token used for authentication.</param>
+    /// <param name="BaseUri">The base URI for the tenant's API.</param>
+    public record TenantApiContext(IManagementApiClient Client, string Token, Uri BaseUri);
 
     public abstract class V1Controller<TEntity, TSpec, TStatus, TConf> : IEntityController<TEntity>
         where TEntity : IKubernetesObject<V1ObjectMeta>, V1Entity<TSpec, TStatus, TConf>
@@ -38,9 +39,14 @@ namespace Alethic.Auth0.Operator.Controllers
         where TStatus : V1EntityStatus
         where TConf : class
     {
-
-        static readonly Newtonsoft.Json.JsonSerializer _newtonsoftJsonSerializer = Newtonsoft.Json.JsonSerializer.CreateDefault();
-        static readonly JsonSerializerOptions _jsonSerializerOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web) { Converters = { new SimplePrimitiveHashtableConverter() } };
+        static readonly Newtonsoft.Json.JsonSerializer _newtonsoftJsonSerializer =
+            Newtonsoft.Json.JsonSerializer.CreateDefault();
+        static readonly JsonSerializerOptions _jsonSerializerOptions = new JsonSerializerOptions(
+            JsonSerializerDefaults.Web
+        )
+        {
+            Converters = { new SimplePrimitiveHashtableConverter() },
+        };
 
         readonly IKubernetesClient _kube;
         readonly EntityRequeue<TEntity> _requeue;
@@ -54,7 +60,12 @@ namespace Alethic.Auth0.Operator.Controllers
         /// <param name="requeue"></param>
         /// <param name="cache"></param>
         /// <param name="logger"></param>
-        public V1Controller(IKubernetesClient kube, EntityRequeue<TEntity> requeue, IMemoryCache cache, ILogger logger)
+        public V1Controller(
+            IKubernetesClient kube,
+            EntityRequeue<TEntity> requeue,
+            IMemoryCache cache,
+            ILogger logger
+        )
         {
             _cache = cache ?? throw new ArgumentNullException(nameof(cache));
             _kube = kube ?? throw new ArgumentNullException(nameof(kube));
@@ -82,8 +93,6 @@ namespace Alethic.Auth0.Operator.Controllers
         /// </summary>
         protected ILogger Logger => _logger;
 
-
-
         /// <summary>
         /// Attempts to resolve the secret document referenced by the secret reference.
         /// </summary>
@@ -91,7 +100,11 @@ namespace Alethic.Auth0.Operator.Controllers
         /// <param name="defaultNamespace"></param>
         /// <param name="cancellationToken"></param>
         /// <returns></returns>
-        public async Task<V1Secret?> ResolveSecretRef(V1SecretReference? secretRef, string defaultNamespace, CancellationToken cancellationToken)
+        public async Task<V1Secret?> ResolveSecretRef(
+            V1SecretReference? secretRef,
+            string defaultNamespace,
+            CancellationToken cancellationToken
+        )
         {
             if (secretRef is null)
                 return null;
@@ -101,7 +114,9 @@ namespace Alethic.Auth0.Operator.Controllers
 
             var ns = secretRef.NamespaceProperty ?? defaultNamespace;
             if (string.IsNullOrWhiteSpace(ns))
-                throw new InvalidOperationException($"Secret reference {secretRef} has no discovered namesace.");
+                throw new InvalidOperationException(
+                    $"Secret reference {secretRef} has no discovered namesace."
+                );
 
             var secret = await _kube.GetAsync<V1Secret>(secretRef.Name, ns, cancellationToken);
             if (secret is null)
@@ -117,7 +132,11 @@ namespace Alethic.Auth0.Operator.Controllers
         /// <param name="defaultNamespace"></param>
         /// <param name="cancellationToken"></param>
         /// <returns></returns>
-        public async Task<V1Tenant?> ResolveTenantRef(V1TenantReference? tenantRef, string defaultNamespace, CancellationToken cancellationToken)
+        public async Task<V1Tenant?> ResolveTenantRef(
+            V1TenantReference? tenantRef,
+            string defaultNamespace,
+            CancellationToken cancellationToken
+        )
         {
             if (tenantRef is null)
                 return null;
@@ -127,7 +146,9 @@ namespace Alethic.Auth0.Operator.Controllers
 
             var ns = tenantRef.Namespace ?? defaultNamespace;
             if (string.IsNullOrWhiteSpace(ns))
-                throw new InvalidOperationException($"Tenant reference {tenantRef} has no discovered namesace.");
+                throw new InvalidOperationException(
+                    $"Tenant reference {tenantRef} has no discovered namesace."
+                );
 
             var tenant = await _kube.GetAsync<V1Tenant>(tenantRef.Name, ns, cancellationToken);
             if (tenant is null)
@@ -144,7 +165,12 @@ namespace Alethic.Auth0.Operator.Controllers
         /// <param name="defaultNamespace"></param>
         /// <param name="cancellationToken"></param>
         /// <returns></returns>
-        public async Task<V1Client?> ResolveClientRef(IManagementApiClient api, V1ClientReference? clientRef, string defaultNamespace, CancellationToken cancellationToken)
+        public async Task<V1Client?> ResolveClientRef(
+            IManagementApiClient api,
+            V1ClientReference? clientRef,
+            string defaultNamespace,
+            CancellationToken cancellationToken
+        )
         {
             if (clientRef is null)
                 return null;
@@ -154,7 +180,9 @@ namespace Alethic.Auth0.Operator.Controllers
 
             var ns = clientRef.Namespace ?? defaultNamespace;
             if (string.IsNullOrWhiteSpace(ns))
-                throw new InvalidOperationException($"Client reference has no discovered namesace.");
+                throw new InvalidOperationException(
+                    $"Client reference has no discovered namesace."
+                );
 
             var client = await _kube.GetAsync<V1Client>(clientRef.Name, ns, cancellationToken);
             if (client is null)
@@ -171,7 +199,12 @@ namespace Alethic.Auth0.Operator.Controllers
         /// <param name="defaultNamespace"></param>
         /// <param name="cancellationToken"></param>
         /// <returns></returns>
-        protected async Task<string?> ResolveClientRefToId(IManagementApiClient api, V1ClientReference? clientRef, string defaultNamespace, CancellationToken cancellationToken)
+        protected async Task<string?> ResolveClientRefToId(
+            IManagementApiClient api,
+            V1ClientReference? clientRef,
+            string defaultNamespace,
+            CancellationToken cancellationToken
+        )
         {
             if (clientRef is null)
                 return null;
@@ -179,15 +212,31 @@ namespace Alethic.Auth0.Operator.Controllers
             if (clientRef.Id is { } id && string.IsNullOrWhiteSpace(id) == false)
                 return id;
 
-            Logger.LogDebug("Attempting to resolve ClientRef {Namespace}/{Name}.", clientRef.Namespace, clientRef.Name);
+            Logger.LogDebug(
+                "Attempting to resolve ClientRef {Namespace}/{Name}.",
+                clientRef.Namespace,
+                clientRef.Name
+            );
 
-            var client = await ResolveClientRef(api, clientRef, defaultNamespace, cancellationToken);
+            var client = await ResolveClientRef(
+                api,
+                clientRef,
+                defaultNamespace,
+                cancellationToken
+            );
             if (client is null)
                 throw new InvalidOperationException($"Could not resolve ClientRef {clientRef}.");
             if (string.IsNullOrWhiteSpace(client.Status.Id))
-                throw new RetryException($"Referenced Client {client.Namespace()}/{client.Name()} has not been reconciled.");
+                throw new RetryException(
+                    $"Referenced Client {client.Namespace()}/{client.Name()} has not been reconciled."
+                );
 
-            Logger.LogDebug("Resolved ClientRef {Namespace}/{Name} to {Id}.", clientRef.Namespace, clientRef.Name, client.Status.Id);
+            Logger.LogDebug(
+                "Resolved ClientRef {Namespace}/{Name} to {Id}.",
+                clientRef.Namespace,
+                clientRef.Name,
+                client.Status.Id
+            );
             return client.Status.Id;
         }
 
@@ -199,7 +248,12 @@ namespace Alethic.Auth0.Operator.Controllers
         /// <param name="defaultNamespace"></param>
         /// <param name="cancellationToken"></param>
         /// <returns></returns>
-        public async Task<V1ResourceServer?> ResolveResourceServerRef(IManagementApiClient api, V1ResourceServerReference? resourceServerRef, string defaultNamespace, CancellationToken cancellationToken)
+        public async Task<V1ResourceServer?> ResolveResourceServerRef(
+            IManagementApiClient api,
+            V1ResourceServerReference? resourceServerRef,
+            string defaultNamespace,
+            CancellationToken cancellationToken
+        )
         {
             if (resourceServerRef is null)
                 return null;
@@ -211,7 +265,11 @@ namespace Alethic.Auth0.Operator.Controllers
             if (string.IsNullOrWhiteSpace(resourceServerRef.Name))
                 throw new InvalidOperationException($"ResourceServer reference has no name.");
 
-            var resourceServer = await _kube.GetAsync<V1ResourceServer>(resourceServerRef.Name, ns, cancellationToken);
+            var resourceServer = await _kube.GetAsync<V1ResourceServer>(
+                resourceServerRef.Name,
+                ns,
+                cancellationToken
+            );
             if (resourceServer is null)
                 throw new RetryException($"ResourceServer reference cannot be resolved.");
 
@@ -226,13 +284,21 @@ namespace Alethic.Auth0.Operator.Controllers
         /// <param name="defaultNamespace"></param>
         /// <param name="cancellationToken"></param>
         /// <returns></returns>
-        protected async Task<string?> ResolveResourceServerRefToIdentifier(IManagementApiClient api, V1ResourceServerReference? reference, string defaultNamespace, CancellationToken cancellationToken)
+        protected async Task<string?> ResolveResourceServerRefToIdentifier(
+            IManagementApiClient api,
+            V1ResourceServerReference? reference,
+            string defaultNamespace,
+            CancellationToken cancellationToken
+        )
         {
             if (reference is null)
                 return null;
 
             // identifier is specified directly by reference
-            if (reference.Identifier is { } identifier && string.IsNullOrWhiteSpace(identifier) == false)
+            if (
+                reference.Identifier is { } identifier
+                && string.IsNullOrWhiteSpace(identifier) == false
+            )
                 return identifier;
 
             // id is specified by reference, lookup identifier
@@ -240,21 +306,41 @@ namespace Alethic.Auth0.Operator.Controllers
             {
                 var self = await api.ResourceServers.GetAsync(id, cancellationToken);
                 if (self is null)
-                    throw new InvalidOperationException($"Failed to resolve ResourceServer reference {id}.");
+                    throw new InvalidOperationException(
+                        $"Failed to resolve ResourceServer reference {id}."
+                    );
 
                 return self.Identifier;
             }
 
-            Logger.LogDebug("Attempting to resolve ResourceServer reference {Namespace}/{Name}.", reference.Namespace, reference.Name);
+            Logger.LogDebug(
+                "Attempting to resolve ResourceServer reference {Namespace}/{Name}.",
+                reference.Namespace,
+                reference.Name
+            );
 
-            var resourceServer = await ResolveResourceServerRef(api, reference, defaultNamespace, cancellationToken);
+            var resourceServer = await ResolveResourceServerRef(
+                api,
+                reference,
+                defaultNamespace,
+                cancellationToken
+            );
             if (resourceServer is null)
-                throw new InvalidOperationException($"Could not resolve ResourceServerRef {reference}.");
+                throw new InvalidOperationException(
+                    $"Could not resolve ResourceServerRef {reference}."
+                );
 
             if (resourceServer.Status.Identifier is null)
-                throw new RetryException($"Referenced ResourceServer {resourceServer.Namespace()}/{resourceServer.Name()} has not been reconcilled.");
+                throw new RetryException(
+                    $"Referenced ResourceServer {resourceServer.Namespace()}/{resourceServer.Name()} has not been reconcilled."
+                );
 
-            Logger.LogDebug("Resolved ResourceServer reference {Namespace}/{Name} to {Identifier}.", reference.Namespace, reference.Name, resourceServer.Status.Identifier);
+            Logger.LogDebug(
+                "Resolved ResourceServer reference {Namespace}/{Name} to {Identifier}.",
+                reference.Namespace,
+                reference.Name,
+                resourceServer.Status.Identifier
+            );
             return resourceServer.Status.Identifier;
         }
 
@@ -264,53 +350,101 @@ namespace Alethic.Auth0.Operator.Controllers
         /// <param name="tenant"></param>
         /// <param name="cancellationToken"></param>
         /// <returns></returns>
-        public async Task<IManagementApiClient> GetTenantApiClientAsync(V1Tenant tenant, CancellationToken cancellationToken)
+        public async Task<IManagementApiClient> GetTenantApiClientAsync(
+            V1Tenant tenant,
+            CancellationToken cancellationToken
+        )
         {
-            var api = await _cache.GetOrCreateAsync((tenant.Namespace(), tenant.Name()), async entry =>
-            {
-                var domain = tenant.Spec.Auth?.Domain;
-                if (string.IsNullOrWhiteSpace(domain))
-                    throw new InvalidOperationException($"Tenant {tenant.Namespace()}/{tenant.Name()} has no authentication domain.");
+            var context = await GetTenantApiContextAsync(tenant, cancellationToken);
+            return context.Client;
+        }
 
-                var secretRef = tenant.Spec.Auth?.SecretRef;
-                if (secretRef == null)
-                    throw new InvalidOperationException($"Tenant {tenant.Namespace()}/{tenant.Name()} has no authentication secret.");
+        /// <summary>
+        /// Gets an active <see cref="TenantApiContext"/> for the specified tenant, including the API client,
+        /// access token, and base URI. This is useful for APIs not covered by the Management API SDK.
+        /// </summary>
+        /// <param name="tenant"></param>
+        /// <param name="cancellationToken"></param>
+        /// <returns></returns>
+        public async Task<TenantApiContext> GetTenantApiContextAsync(
+            V1Tenant tenant,
+            CancellationToken cancellationToken
+        )
+        {
+            var context = await _cache.GetOrCreateAsync(
+                (tenant.Namespace(), tenant.Name()),
+                async entry =>
+                {
+                    var domain = tenant.Spec.Auth?.Domain;
+                    if (string.IsNullOrWhiteSpace(domain))
+                        throw new InvalidOperationException(
+                            $"Tenant {tenant.Namespace()}/{tenant.Name()} has no authentication domain."
+                        );
 
-                if (string.IsNullOrWhiteSpace(secretRef.Name))
-                    throw new InvalidOperationException($"Tenant {tenant.Namespace()}/{tenant.Name()} has no secret name.");
+                    var secretRef = tenant.Spec.Auth?.SecretRef;
+                    if (secretRef == null)
+                        throw new InvalidOperationException(
+                            $"Tenant {tenant.Namespace()}/{tenant.Name()} has no authentication secret."
+                        );
 
-                var secret = _kube.Get<V1Secret>(secretRef.Name, secretRef.NamespaceProperty ?? tenant.Namespace());
-                if (secret == null)
-                    throw new RetryException($"Tenant {tenant.Namespace()}/{tenant.Name()} has missing secret.");
+                    if (string.IsNullOrWhiteSpace(secretRef.Name))
+                        throw new InvalidOperationException(
+                            $"Tenant {tenant.Namespace()}/{tenant.Name()} has no secret name."
+                        );
 
-                if (secret.Data.TryGetValue("clientId", out var clientIdBuf) == false)
-                    throw new RetryException($"Tenant {tenant.Namespace()}/{tenant.Name()} has missing clientId value on secret.");
+                    var secret = _kube.Get<V1Secret>(
+                        secretRef.Name,
+                        secretRef.NamespaceProperty ?? tenant.Namespace()
+                    );
+                    if (secret == null)
+                        throw new RetryException(
+                            $"Tenant {tenant.Namespace()}/{tenant.Name()} has missing secret."
+                        );
 
-                if (secret.Data.TryGetValue("clientSecret", out var clientSecretBuf) == false)
-                    throw new RetryException($"Tenant {tenant.Namespace()}/{tenant.Name()} has missing clientSecret value on secret.");
+                    if (secret.Data.TryGetValue("clientId", out var clientIdBuf) == false)
+                        throw new RetryException(
+                            $"Tenant {tenant.Namespace()}/{tenant.Name()} has missing clientId value on secret."
+                        );
 
-                // decode secret values
-                var clientId = Encoding.UTF8.GetString(clientIdBuf);
-                var clientSecret = Encoding.UTF8.GetString(clientSecretBuf);
+                    if (secret.Data.TryGetValue("clientSecret", out var clientSecretBuf) == false)
+                        throw new RetryException(
+                            $"Tenant {tenant.Namespace()}/{tenant.Name()} has missing clientSecret value on secret."
+                        );
 
-                // retrieve authentication token
-                var auth = new AuthenticationApiClient(new Uri($"https://{domain}"));
-                var authToken = await auth.GetTokenAsync(new ClientCredentialsTokenRequest() { Audience = $"https://{domain}/api/v2/", ClientId = clientId, ClientSecret = clientSecret }, cancellationToken);
-                if (authToken.AccessToken == null || authToken.AccessToken.Length == 0)
-                    throw new RetryException($"Tenant {tenant.Namespace()}/{tenant.Name()} failed to retrieve management API token.");
+                    // decode secret values
+                    var clientId = Encoding.UTF8.GetString(clientIdBuf);
+                    var clientSecret = Encoding.UTF8.GetString(clientSecretBuf);
 
-                // contact API using token and domain
-                var api = new ManagementApiClient(authToken.AccessToken, new Uri($"https://{domain}/api/v2/"));
+                    // retrieve authentication token
+                    var auth = new AuthenticationApiClient(new Uri($"https://{domain}"));
+                    var authToken = await auth.GetTokenAsync(
+                        new ClientCredentialsTokenRequest()
+                        {
+                            Audience = $"https://{domain}/api/v2/",
+                            ClientId = clientId,
+                            ClientSecret = clientSecret,
+                        },
+                        cancellationToken
+                    );
+                    if (authToken.AccessToken == null || authToken.AccessToken.Length == 0)
+                        throw new RetryException(
+                            $"Tenant {tenant.Namespace()}/{tenant.Name()} failed to retrieve management API token."
+                        );
 
-                // cache API client for 1 minute
-                entry.SetAbsoluteExpiration(TimeSpan.FromMinutes(1));
-                return (IManagementApiClient)api;
-            });
+                    // contact API using token and domain
+                    var baseUri = new Uri($"https://{domain}/api/v2/");
+                    var client = new ManagementApiClient(authToken.AccessToken, baseUri);
 
-            if (api is null)
-                throw new InvalidOperationException("Cannot retrieve tenant API client.");
+                    // cache API context for 1 minute
+                    entry.SetAbsoluteExpiration(TimeSpan.FromMinutes(1));
+                    return new TenantApiContext(client, authToken.AccessToken, baseUri);
+                }
+            );
 
-            return api;
+            if (context is null)
+                throw new InvalidOperationException("Cannot retrieve tenant API context.");
+
+            return context;
         }
 
         /// <summary>
@@ -319,18 +453,27 @@ namespace Alethic.Auth0.Operator.Controllers
         /// <param name="entity"></param>
         /// <param name="cancellationToken"></param>
         /// <returns></returns>
-        protected async Task ReconcileSuccessAsync(TEntity entity, CancellationToken cancellationToken)
+        protected async Task ReconcileSuccessAsync(
+            TEntity entity,
+            CancellationToken cancellationToken
+        )
         {
-            await _kube.CreateAsync(new Eventsv1Event(
+            await _kube.CreateAsync(
+                new Eventsv1Event(
                     DateTime.Now,
-                    metadata: new V1ObjectMeta(namespaceProperty: entity.Namespace(), generateName: "auth0"),
+                    metadata: new V1ObjectMeta(
+                        namespaceProperty: entity.Namespace(),
+                        generateName: "auth0"
+                    ),
                     reportingController: "kubernetes.auth0.com/operator",
                     reportingInstance: Dns.GetHostName(),
                     regarding: entity.MakeObjectReference(),
                     action: "Reconcile",
                     type: "Normal",
-                    reason: "Success"),
-                cancellationToken);
+                    reason: "Success"
+                ),
+                cancellationToken
+            );
         }
 
         /// <summary>
@@ -341,19 +484,30 @@ namespace Alethic.Auth0.Operator.Controllers
         /// <param name="note"></param>
         /// <param name="cancellationToken"></param>
         /// <returns></returns>
-        protected async Task ReconcileWarningAsync(TEntity entity, string reason, string note, CancellationToken cancellationToken)
+        protected async Task ReconcileWarningAsync(
+            TEntity entity,
+            string reason,
+            string note,
+            CancellationToken cancellationToken
+        )
         {
-            await _kube.CreateAsync(new Eventsv1Event(
+            await _kube.CreateAsync(
+                new Eventsv1Event(
                     DateTime.Now,
-                    metadata: new V1ObjectMeta(namespaceProperty: entity.Namespace(), generateName: "auth0"),
+                    metadata: new V1ObjectMeta(
+                        namespaceProperty: entity.Namespace(),
+                        generateName: "auth0"
+                    ),
                     reportingController: "kubernetes.auth0.com/operator",
                     reportingInstance: Dns.GetHostName(),
                     regarding: entity.MakeObjectReference(),
                     action: "Reconcile",
                     type: "Warning",
                     reason: reason,
-                    note: note),
-                cancellationToken);
+                    note: note
+                ),
+                cancellationToken
+            );
         }
 
         /// <summary>
@@ -364,19 +518,30 @@ namespace Alethic.Auth0.Operator.Controllers
         /// <param name="note"></param>
         /// <param name="cancellationToken"></param>
         /// <returns></returns>
-        protected async Task DeletingWarningAsync(TEntity entity, string reason, string note, CancellationToken cancellationToken)
+        protected async Task DeletingWarningAsync(
+            TEntity entity,
+            string reason,
+            string note,
+            CancellationToken cancellationToken
+        )
         {
-            await _kube.CreateAsync(new Eventsv1Event(
+            await _kube.CreateAsync(
+                new Eventsv1Event(
                     DateTime.Now,
-                    metadata: new V1ObjectMeta(namespaceProperty: entity.Namespace(), generateName: "auth0"),
+                    metadata: new V1ObjectMeta(
+                        namespaceProperty: entity.Namespace(),
+                        generateName: "auth0"
+                    ),
                     reportingController: "kubernetes.auth0.com/operator",
                     reportingInstance: Dns.GetHostName(),
                     regarding: entity.MakeObjectReference(),
                     action: "Deleting",
                     type: "Warning",
                     reason: reason,
-                    note: note),
-                cancellationToken);
+                    note: note
+                ),
+                cancellationToken
+            );
         }
 
         /// <summary>
@@ -395,7 +560,13 @@ namespace Alethic.Auth0.Operator.Controllers
             if (from == null)
                 return null;
 
-            var to = _newtonsoftJsonSerializer.Deserialize<TTo>(new JsonTextReader(new StringReader(System.Text.Json.JsonSerializer.Serialize(from, _jsonSerializerOptions))));
+            var to = _newtonsoftJsonSerializer.Deserialize<TTo>(
+                new JsonTextReader(
+                    new StringReader(
+                        System.Text.Json.JsonSerializer.Serialize(from, _jsonSerializerOptions)
+                    )
+                )
+            );
             if (to is null)
                 throw new InvalidOperationException();
 
@@ -418,7 +589,10 @@ namespace Alethic.Auth0.Operator.Controllers
             using var w = new StringWriter();
             _newtonsoftJsonSerializer.Serialize(w, from);
 
-            var to = System.Text.Json.JsonSerializer.Deserialize<TTo>(w.ToString(), _jsonSerializerOptions);
+            var to = System.Text.Json.JsonSerializer.Deserialize<TTo>(
+                w.ToString(),
+                _jsonSerializerOptions
+            );
             if (to is null)
                 throw new InvalidOperationException();
 
@@ -438,7 +612,9 @@ namespace Alethic.Auth0.Operator.Controllers
             try
             {
                 if (entity.Spec.Conf == null)
-                    throw new InvalidOperationException($"{EntityTypeName} {entity.Namespace()}/{entity.Name()} is missing configuration.");
+                    throw new InvalidOperationException(
+                        $"{EntityTypeName} {entity.Namespace()}/{entity.Name()} is missing configuration."
+                    );
 
                 // does the actual work of reconciling
                 await Reconcile(entity, cancellationToken);
@@ -449,8 +625,20 @@ namespace Alethic.Auth0.Operator.Controllers
             {
                 try
                 {
-                    Logger.LogError(e, "API error reconciling {EntityTypeName} {EntityNamespace}/{EntityName}: {Message}", EntityTypeName, entity.Namespace(), entity.Name(), e.ApiError?.Message ?? "");
-                    await ReconcileWarningAsync(entity, "ApiError", e.ApiError?.Message ?? "", cancellationToken);
+                    Logger.LogError(
+                        e,
+                        "API error reconciling {EntityTypeName} {EntityNamespace}/{EntityName}: {Message}",
+                        EntityTypeName,
+                        entity.Namespace(),
+                        entity.Name(),
+                        e.ApiError?.Message ?? ""
+                    );
+                    await ReconcileWarningAsync(
+                        entity,
+                        "ApiError",
+                        e.ApiError?.Message ?? "",
+                        cancellationToken
+                    );
                 }
                 catch (Exception e2)
                 {
@@ -461,8 +649,18 @@ namespace Alethic.Auth0.Operator.Controllers
             {
                 try
                 {
-                    Logger.LogError("Rate limit hit reconciling {EntityTypeName} {EntityNamespace}/{EntityName}", EntityTypeName, entity.Namespace(), entity.Name());
-                    await ReconcileWarningAsync(entity, "RateLimit", e.ApiError?.Message ?? "", cancellationToken);
+                    Logger.LogError(
+                        "Rate limit hit reconciling {EntityTypeName} {EntityNamespace}/{EntityName}",
+                        EntityTypeName,
+                        entity.Namespace(),
+                        entity.Name()
+                    );
+                    await ReconcileWarningAsync(
+                        entity,
+                        "RateLimit",
+                        e.ApiError?.Message ?? "",
+                        cancellationToken
+                    );
                 }
                 catch (Exception e2)
                 {
@@ -470,7 +668,9 @@ namespace Alethic.Auth0.Operator.Controllers
                 }
 
                 // calculate next attempt time, floored to one minute
-                var n = e.RateLimit?.Reset is DateTimeOffset r ? r - DateTimeOffset.Now : TimeSpan.FromMinutes(1);
+                var n = e.RateLimit?.Reset is DateTimeOffset r
+                    ? r - DateTimeOffset.Now
+                    : TimeSpan.FromMinutes(1);
                 if (n < TimeSpan.FromMinutes(1))
                     n = TimeSpan.FromMinutes(1);
 
@@ -481,7 +681,13 @@ namespace Alethic.Auth0.Operator.Controllers
             {
                 try
                 {
-                    Logger.LogError("Retry hit reconciling {EntityTypeName} {EntityNamespace}/{EntityName}: {Message}", EntityTypeName, entity.Namespace(), entity.Name(), e.Message);
+                    Logger.LogError(
+                        "Retry hit reconciling {EntityTypeName} {EntityNamespace}/{EntityName}: {Message}",
+                        EntityTypeName,
+                        entity.Namespace(),
+                        entity.Name(),
+                        e.Message
+                    );
                     await DeletingWarningAsync(entity, "Retry", e.Message, cancellationToken);
                 }
                 catch (Exception e2)
@@ -489,7 +695,10 @@ namespace Alethic.Auth0.Operator.Controllers
                     Logger.LogCritical(e2, "Unexpected exception creating event.");
                 }
 
-                Logger.LogInformation("Rescheduling reconcilation after {TimeSpan}.", TimeSpan.FromMinutes(1));
+                Logger.LogInformation(
+                    "Rescheduling reconcilation after {TimeSpan}.",
+                    TimeSpan.FromMinutes(1)
+                );
                 Requeue(entity, TimeSpan.FromMinutes(1));
             }
             catch (Exception e)
@@ -509,7 +718,5 @@ namespace Alethic.Auth0.Operator.Controllers
 
         /// <inheritdoc />
         public abstract Task DeletedAsync(TEntity entity, CancellationToken cancellationToken);
-
     }
-
 }

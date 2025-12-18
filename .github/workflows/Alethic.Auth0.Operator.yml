@@ -104,6 +104,8 @@ jobs:
     needs:
     - build
     runs-on: ubuntu-22.04
+    env:
+      OWNER_LC: ${{ github.repository_owner }}
     steps:
     - name: Checkout Source
       uses: actions/checkout@v4
@@ -148,18 +150,22 @@ jobs:
         artifacts: dist/containers/*.tar,dist/charts/*.tgz
         makeLatest: true
         token: ${{ secrets.GITHUB_TOKEN }}
+    - name: Set Lowercase Owner
+      run: echo "OWNER_LC=${OWNER_LC,,}" >> $GITHUB_ENV
     - name: Login To Repository (GitHub)
       uses: redhat-actions/podman-login@v1
       with:
         username: ${{ github.actor }}
         password: ${{ github.token }}
-        registry: ghcr.io/${{ github.repository_owner }}
+        registry: ghcr.io/${{ env.OWNER_LC }}
     - name: Push Containers (GitHub)
       if: github.event_name != 'pull_request'
-      uses: docker://quay.io/skopeo/stable:latest
-      with:
-        args: copy "--dest-creds=${{ github.actor }}:${{ github.token }}" docker-archive:/github/workspace/dist/containers/auth0-operator-image.tar docker://ghcr.io/${{ github.repository_owner }}/auth0-operator-image:${{ steps.GitVersion.outputs.semVer }}
+      run: |
+        skopeo copy \
+          "--dest-creds=${{ github.actor }}:${{ github.token }}" \
+          docker-archive:dist/containers/auth0-operator-image.tar \
+          docker://ghcr.io/${{ env.OWNER_LC }}/auth0-operator-image:${{ steps.GitVersion.outputs.semVer }}
     - name: Push Charts (GitHub)
       if: github.event_name != 'pull_request'
-      run: helm push dist/charts/*.tgz oci://ghcr.io/${{ github.repository_owner }}
+      run: helm push dist/charts/*.tgz oci://ghcr.io/${{ env.OWNER_LC }}
   

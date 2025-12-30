@@ -1,3 +1,15 @@
+# CRD management options
+crds:
+  # Set to false to disable CRD installation when CRDs are managed externally.
+  # Useful when:
+  # - CRDs are managed separately (e.g., by a platform team)
+  # - Using cdk8s or other tools that handle CRDs independently
+  # - CRDs are deployed via a separate GitOps application
+  #
+  # For cdk8s or other tools, use the static CRD bundle from releases:
+  # https://github.com/MrMint/auth0-operator/releases/download/<version>/auth0-operator.crds.yaml
+  install: true
+
 operator:
   env: []
 
@@ -8,8 +20,9 @@ operator:
   additionalLabels: {}
 
   # Specify the Operator container image to use for the deployment.
+  # NOTE: This fork uses ghcr.io/mrmint/... instead of upstream's ghcr.io/alethic/...
   image:
-    repository: ghcr.io/alethic/auth0-operator-image
+    repository: ghcr.io/mrmint/auth0-operator-image
     pullPolicy: IfNotPresent
 
   # An array of Kubernetes secrets to use for pulling images from a private ``image.repository``.

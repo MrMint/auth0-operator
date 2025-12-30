@@ -147,7 +147,7 @@ jobs:
         tag: ${{ steps.GitVersion.outputs.semVer }}
         allowUpdates: true
         omitBodyDuringUpdate: true
-        artifacts: dist/containers/*.tar,dist/charts/*.tgz
+        artifacts: dist/containers/*.tar,dist/charts/*.tgz,dist/charts/auth0-operator.crds.yaml
         makeLatest: true
         token: ${{ secrets.GITHUB_TOKEN }}
     - name: Set Lowercase Owner

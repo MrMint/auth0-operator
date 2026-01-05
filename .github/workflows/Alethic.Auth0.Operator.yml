@@ -152,19 +152,56 @@ jobs:
         token: ${{ secrets.GITHUB_TOKEN }}
     - name: Set Lowercase Owner
       run: echo "OWNER_LC=${OWNER_LC,,}" >> $GITHUB_ENV
-    - name: Login To Repository (GitHub)
-      uses: redhat-actions/podman-login@v1
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    - name: Login to GitHub Container Registry
+      uses: docker/login-action@v3
       with:
+        registry: ghcr.io
         username: ${{ github.actor }}
         password: ${{ github.token }}
-        registry: ghcr.io/${{ env.OWNER_LC }}
-    - name: Push Containers (GitHub)
+    - name: Push Multi-Arch Containers (GitHub)
       if: github.event_name != 'pull_request'
       run: |
-        skopeo copy \
-          "--dest-creds=${{ github.actor }}:${{ github.token }}" \
-          docker-archive:dist/containers/auth0-operator-image.tar \
-          docker://ghcr.io/${{ env.OWNER_LC }}/auth0-operator-image:${{ steps.GitVersion.outputs.semVer }}
+        IMAGE_NAME="ghcr.io/${{ env.OWNER_LC }}/auth0-operator-image"
+        VERSION="${{ steps.GitVersion.outputs.semVer }}"
+        
+        echo "Loading AMD64 image..."
+        docker load -i dist/containers/auth0-operator-image-linux-x64.tar
+        AMD64_IMAGE=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep auth0-operator-image | head -1)
+        docker tag "$AMD64_IMAGE" "${IMAGE_NAME}:${VERSION}-amd64"
+        docker push "${IMAGE_NAME}:${VERSION}-amd64"
+        
+        echo "Loading ARM64 image..."
+        docker load -i dist/containers/auth0-operator-image-linux-arm64.tar
+        ARM64_IMAGE=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep auth0-operator-image | grep -v amd64 | head -1)
+        docker tag "$ARM64_IMAGE" "${IMAGE_NAME}:${VERSION}-arm64"
+        docker push "${IMAGE_NAME}:${VERSION}-arm64"
+        
+        echo "Creating and pushing multi-arch manifest..."
+        docker buildx imagetools create -t "${IMAGE_NAME}:${VERSION}" \
+          "${IMAGE_NAME}:${VERSION}-amd64" \
+          "${IMAGE_NAME}:${VERSION}-arm64"
+        
+        echo "✅ Multi-arch manifest created for ${IMAGE_NAME}:${VERSION}"
+    - name: Verify Multi-Arch Container Image
+      if: github.event_name != 'pull_request'
+      run: |
+        echo "Verifying multi-arch container image was pushed successfully..."
+        docker buildx imagetools inspect ghcr.io/${{ env.OWNER_LC }}/auth0-operator-image:${{ steps.GitVersion.outputs.semVer }}
+        echo "✅ Multi-arch container image ghcr.io/${{ env.OWNER_LC }}/auth0-operator-image:${{ steps.GitVersion.outputs.semVer }} verified"
+    - name: Verify Helm Chart Image Reference
+      if: github.event_name != 'pull_request'
+      run: |
+        echo "Verifying Helm chart references correct image repository..."
+        EXPECTED_REPO="ghcr.io/${{ env.OWNER_LC }}/auth0-operator-image"
+        CHART_REPO=$(tar -xzOf dist/charts/*.tgz auth0-operator/values.yaml | grep -A1 'image:' | grep 'repository:' | awk '{print $2}')
+        if [ "$CHART_REPO" != "$EXPECTED_REPO" ]; then
+          echo "❌ ERROR: Helm chart references '$CHART_REPO' but container was pushed to '$EXPECTED_REPO'"
+          echo "Please update charts/auth0-operator/values.yaml to use the correct image repository"
+          exit 1
+        fi
+        echo "✅ Helm chart correctly references $EXPECTED_REPO"
     - name: Push Charts (GitHub)
       if: github.event_name != 'pull_request'
       run: helm push dist/charts/*.tgz oci://ghcr.io/${{ env.OWNER_LC }}

@@ -1,0 +1,406 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "Auth0 Operator Helm Values",
+  "description": "JSON Schema for auth0-operator Helm chart values",
+  "type": "object",
+  "properties": {
+    "crds": {
+      "description": "CRD management options",
+      "type": "object",
+      "properties": {
+        "install": {
+          "description": "Set to false to disable CRD installation when CRDs are managed externally (e.g., by a platform team, cdk8s, or GitOps)",
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "operator": {
+      "description": "Operator deployment configuration",
+      "type": "object",
+      "properties": {
+        "env": {
+          "description": "Additional environment variables for the operator container",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "value": {
+                "type": "string"
+              },
+              "valueFrom": {
+                "type": "object",
+                "properties": {
+                  "secretKeyRef": {
+                    "type": "object",
+                    "properties": {
+                      "name": { "type": "string" },
+                      "key": { "type": "string" }
+                    }
+                  },
+                  "configMapKeyRef": {
+                    "type": "object",
+                    "properties": {
+                      "name": { "type": "string" },
+                      "key": { "type": "string" }
+                    }
+                  },
+                  "fieldRef": {
+                    "type": "object",
+                    "properties": {
+                      "fieldPath": { "type": "string" }
+                    }
+                  }
+                }
+              }
+            },
+            "required": ["name"]
+          },
+          "default": []
+        },
+        "serviceAccountAnnotations": {
+          "description": "Additional annotations to be applied to the operator service account",
+          "type": "array",
+          "items": {
+            "type": "object"
+          },
+          "default": []
+        },
+        "additionalLabels": {
+          "description": "Additional labels to be applied to operator resources",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        },
+        "image": {
+          "description": "Container image settings",
+          "type": "object",
+          "properties": {
+            "repository": {
+              "description": "Container image repository",
+              "type": "string",
+              "minLength": 1,
+              "default": "ghcr.io/mrmint/auth0-operator-image"
+            },
+            "tag": {
+              "description": "Container image tag (defaults to chart appVersion if not set)",
+              "type": "string"
+            },
+            "pullPolicy": {
+              "description": "Image pull policy",
+              "type": "string",
+              "enum": ["IfNotPresent", "Always", "Never"],
+              "default": "IfNotPresent"
+            }
+          },
+          "required": ["repository", "pullPolicy"],
+          "additionalProperties": false
+        },
+        "imagePullSecrets": {
+          "description": "Kubernetes secrets for pulling images from a private repository",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": ["name"]
+          },
+          "default": []
+        },
+        "initContainers": {
+          "description": "Init containers to start up before the Operator pods",
+          "type": "array",
+          "items": {
+            "type": "object"
+          },
+          "default": []
+        },
+        "replicaCount": {
+          "description": "Number of Operator pods to deploy",
+          "type": "integer",
+          "minimum": 1,
+          "default": 1
+        },
+        "securityContext": {
+          "description": "Pod-level security context",
+          "type": "object",
+          "properties": {
+            "runAsUser": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "runAsGroup": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "runAsNonRoot": {
+              "type": "boolean"
+            },
+            "fsGroup": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "fsGroupChangePolicy": {
+              "type": "string",
+              "enum": ["OnRootMismatch", "Always"]
+            },
+            "supplementalGroups": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          "additionalProperties": true
+        },
+        "containerSecurityContext": {
+          "description": "Container-level security context",
+          "type": "object",
+          "properties": {
+            "runAsUser": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "runAsGroup": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "runAsNonRoot": {
+              "type": "boolean"
+            },
+            "allowPrivilegeEscalation": {
+              "type": "boolean"
+            },
+            "readOnlyRootFilesystem": {
+              "type": "boolean"
+            },
+            "privileged": {
+              "type": "boolean"
+            },
+            "capabilities": {
+              "type": "object",
+              "properties": {
+                "add": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                },
+                "drop": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                }
+              }
+            },
+            "seccompProfile": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": ["RuntimeDefault", "Unconfined", "Localhost"]
+                },
+                "localhostProfile": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "additionalProperties": true
+        },
+        "volumes": {
+          "description": "Additional volumes to mount to the operator pods",
+          "type": "array",
+          "items": {
+            "type": "object"
+          },
+          "default": []
+        },
+        "volumeMounts": {
+          "description": "Volume mount points for the operator container",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string" },
+              "mountPath": { "type": "string" },
+              "subPath": { "type": "string" },
+              "readOnly": { "type": "boolean" }
+            },
+            "required": ["name", "mountPath"]
+          },
+          "default": []
+        },
+        "nodeSelector": {
+          "description": "Node selectors to apply to Operator pods",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        },
+        "priorityClassName": {
+          "description": "Pod priority class name",
+          "type": "string",
+          "default": ""
+        },
+        "affinity": {
+          "description": "Affinity or anti-affinity settings for Operator pods",
+          "type": "object",
+          "properties": {
+            "nodeAffinity": {
+              "type": "object"
+            },
+            "podAffinity": {
+              "type": "object"
+            },
+            "podAntiAffinity": {
+              "type": "object"
+            }
+          },
+          "additionalProperties": false
+        },
+        "tolerations": {
+          "description": "Tolerations to apply to Operator pods",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "key": { "type": "string" },
+              "operator": {
+                "type": "string",
+                "enum": ["Exists", "Equal"]
+              },
+              "value": { "type": "string" },
+              "effect": {
+                "type": "string",
+                "enum": ["NoSchedule", "PreferNoSchedule", "NoExecute"]
+              },
+              "tolerationSeconds": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          "default": []
+        },
+        "topologySpreadConstraints": {
+          "description": "Topology spread constraints for Operator pods",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "maxSkew": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "topologyKey": { "type": "string" },
+              "whenUnsatisfiable": {
+                "type": "string",
+                "enum": ["DoNotSchedule", "ScheduleAnyway"]
+              },
+              "labelSelector": {
+                "type": "object"
+              },
+              "minDomains": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": ["maxSkew", "topologyKey", "whenUnsatisfiable"]
+          },
+          "default": []
+        },
+        "resources": {
+          "description": "Resource requests and limits for the Operator container",
+          "type": "object",
+          "properties": {
+            "requests": {
+              "description": "Resource requests",
+              "type": "object",
+              "properties": {
+                "cpu": {
+                  "description": "CPU request",
+                  "oneOf": [
+                    { "type": "string", "pattern": "^[0-9]+m?$" },
+                    { "type": "number", "minimum": 0 }
+                  ]
+                },
+                "memory": {
+                  "description": "Memory request",
+                  "oneOf": [
+                    { "type": "string", "pattern": "^[0-9]+(Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?$" },
+                    { "type": "number", "minimum": 0 }
+                  ]
+                }
+              }
+            },
+            "limits": {
+              "description": "Resource limits",
+              "type": "object",
+              "properties": {
+                "cpu": {
+                  "description": "CPU limit",
+                  "oneOf": [
+                    { "type": "string", "pattern": "^[0-9]+m?$" },
+                    { "type": "number", "minimum": 0 }
+                  ]
+                },
+                "memory": {
+                  "description": "Memory limit",
+                  "oneOf": [
+                    { "type": "string", "pattern": "^[0-9]+(Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?$" },
+                    { "type": "number", "minimum": 0 }
+                  ]
+                }
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "options": {
+      "description": "Operator configuration options",
+      "type": "object",
+      "properties": {
+        "namespace": {
+          "description": "Limit operation to a single namespace (NOT YET SUPPORTED)",
+          "type": "string"
+        },
+        "reconciliation": {
+          "description": "Reconciliation settings",
+          "type": "object",
+          "properties": {
+            "interval": {
+              "description": "Reconciliation interval duration (e.g., '5m', '1h')",
+              "type": "string",
+              "pattern": "^[0-9]+(s|m|h)$"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "nameOverride": {
+      "description": "Override the name of the chart",
+      "type": "string"
+    },
+    "fullnameOverride": {
+      "description": "Override the full name of the chart",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

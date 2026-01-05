@@ -8,6 +8,7 @@
 
     <ItemGroup>
         <ContainerTarget Include="..\Alethic.Auth0.Operator\Alethic.Auth0.Operator.csproj" TargetFramework="net9.0" RuntimeIdentifier="linux-x64" />
+        <ContainerTarget Include="..\Alethic.Auth0.Operator\Alethic.Auth0.Operator.csproj" TargetFramework="net9.0" RuntimeIdentifier="linux-arm64" />
     </ItemGroup>
 
     <!-- Runs once per TFM/RID combination to generate individual output. -->

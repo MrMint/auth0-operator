@@ -1,14 +1,28 @@
-# CRD management options
-crds:
-  # Set to false to disable CRD installation when CRDs are managed externally.
-  # Useful when:
-  # - CRDs are managed separately (e.g., by a platform team)
-  # - Using cdk8s or other tools that handle CRDs independently
-  # - CRDs are deployed via a separate GitOps application
-  #
-  # For cdk8s or other tools, use the static CRD bundle from releases:
-  # https://github.com/MrMint/auth0-operator/releases/download/<version>/auth0-operator.crds.yaml
-  install: true
+# CRD Management
+# ==============
+# CRDs are located in the chart's crds/ directory and are managed by Helm.
+#
+# Helm Behavior:
+# - helm install: CRDs are installed automatically (use --skip-crds to skip)
+# - helm template: CRDs are NOT included by default (use --include-crds to include)
+#
+# This means cdk8s and other tools using "helm template" will NOT get CRDs
+# by default, preventing duplication when CRDs are managed externally.
+#
+# To include CRDs in helm template output:
+#   helm template auth0-operator oci://ghcr.io/mrmint/auth0-operator --include-crds
+#
+# To skip CRDs during helm install:
+#   helm install auth0-operator oci://ghcr.io/mrmint/auth0-operator --skip-crds
+#
+# External CRD Management (recommended for GitOps/ArgoCD):
+# Use the static CRD bundle from releases:
+#   https://github.com/MrMint/auth0-operator/releases/download/<version>/auth0-operator.crds.yaml
+#
+# This allows you to:
+# - Control CRD deployment timing with ArgoCD sync waves
+# - Manage CRD lifecycle independently from the operator
+# - Avoid CRD duplication warnings
 
 operator:
   env: []

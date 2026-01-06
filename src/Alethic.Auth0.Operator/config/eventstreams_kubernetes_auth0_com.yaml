@@ -70,8 +70,8 @@ spec:
                     status:
                       type: string
                       enum:
-                        - active
-                        - paused
+                        - enabled
+                        - disabled
                     subscriptions:
                       type: array
                       items:

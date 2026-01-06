@@ -45,7 +45,7 @@ namespace Alethic.Auth0.Operator.Core.Models.EventStream
         public string? Type { get; set; }
 
         /// <summary>
-        /// The status of the event stream: active, paused.
+        /// The status of the event stream: enabled, disabled.
         /// </summary>
         [JsonPropertyName("status")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

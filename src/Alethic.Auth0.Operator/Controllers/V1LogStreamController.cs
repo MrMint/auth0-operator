@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Text;
@@ -256,7 +257,71 @@ namespace Alethic.Auth0.Operator.Controllers
         {
             entity.Status.CurrentStatus = (string?)lastConf["status"];
             entity.Status.Type = (string?)lastConf["type"];
+
+            // Extract sink configuration for API-generated values
+            // Handle various deserialization types (Hashtable, JsonElement, IDictionary)
+            var sink = GetNestedValue(lastConf, "sink");
+            if (sink is not null)
+            {
+                // AWS Partner Event Source for EventBridge log streams
+                var awsPartnerEventSource = GetStringValue(sink, "awsPartnerEventSource");
+                if (!string.IsNullOrEmpty(awsPartnerEventSource))
+                {
+                    entity.Status.AwsPartnerEventSource = awsPartnerEventSource;
+                    Logger.LogDebug(
+                        "{EntityTypeName} {EntityNamespace}/{EntityName} extracted awsPartnerEventSource: {PartnerEventSource}",
+                        EntityTypeName,
+                        entity.Namespace(),
+                        entity.Name(),
+                        awsPartnerEventSource
+                    );
+                }
+
+                // Azure Partner Topic for EventGrid log streams
+                var azurePartnerTopic = GetStringValue(sink, "azurePartnerTopic");
+                if (!string.IsNullOrEmpty(azurePartnerTopic))
+                {
+                    entity.Status.AzurePartnerTopic = azurePartnerTopic;
+                    Logger.LogDebug(
+                        "{EntityTypeName} {EntityNamespace}/{EntityName} extracted azurePartnerTopic: {PartnerTopic}",
+                        EntityTypeName,
+                        entity.Namespace(),
+                        entity.Name(),
+                        azurePartnerTopic
+                    );
+                }
+            }
+
             await base.ApplyStatus(api, entity, lastConf, defaultNamespace, cancellationToken);
+        }
+
+        /// <summary>
+        /// Gets a nested object value from various container types.
+        /// </summary>
+        private static object? GetNestedValue(object? container, string key)
+        {
+            return container switch
+            {
+                Hashtable ht => ht[key],
+                IDictionary<string, object> dict => dict.TryGetValue(key, out var val) ? val : null,
+                System.Text.Json.JsonElement je when je.ValueKind == System.Text.Json.JsonValueKind.Object =>
+                    je.TryGetProperty(key, out var prop) ? (object)prop : null,
+                _ => null
+            };
+        }
+
+        /// <summary>
+        /// Gets a string value from various container types.
+        /// </summary>
+        private static string? GetStringValue(object? container, string key)
+        {
+            var value = GetNestedValue(container, key);
+            return value switch
+            {
+                string s => s,
+                System.Text.Json.JsonElement je when je.ValueKind == System.Text.Json.JsonValueKind.String => je.GetString(),
+                _ => value?.ToString()
+            };
         }
 
         /// <inheritdoc />

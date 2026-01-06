@@ -212,26 +212,82 @@ namespace Alethic.Auth0.Operator.Controllers
         {
             entity.Status.CurrentStatus = lastConf["status"]?.ToString();
 
-            // Extract destination type
-            if (lastConf["destination"] is IDictionary<string, object> destination)
+            // Extract destination type and configuration
+            // Handle various deserialization types (Hashtable, JsonElement, IDictionary)
+            var destination = GetNestedValue(lastConf, "destination");
+            if (destination is not null)
             {
-                entity.Status.Type = destination.TryGetValue("type", out var destType)
-                    ? destType?.ToString()
-                    : null;
+                entity.Status.Type = GetStringValue(destination, "type");
+
+                // Extract AWS Partner Event Source for EventBridge destinations
+                var configuration = GetNestedValue(destination, "configuration");
+                if (configuration is not null)
+                {
+                    var partnerEventSource = GetStringValue(configuration, "aws_partner_event_source");
+                    if (!string.IsNullOrEmpty(partnerEventSource))
+                    {
+                        entity.Status.AwsPartnerEventSource = partnerEventSource;
+                        Logger.LogDebug(
+                            "{EntityTypeName} {EntityNamespace}/{EntityName} extracted awsPartnerEventSource: {PartnerEventSource}",
+                            EntityTypeName,
+                            entity.Namespace(),
+                            entity.Name(),
+                            partnerEventSource
+                        );
+                    }
+                }
             }
 
             // Extract subscribed events
             if (lastConf["subscriptions"] is IEnumerable<object> subscriptions)
             {
                 entity.Status.SubscribedEvents = subscriptions
-                    .OfType<IDictionary<string, object>>()
-                    .Select(s => s.TryGetValue("event_type", out var et) ? et?.ToString() : null)
+                    .Select(s => GetStringValue(s, "event_type"))
+                    .Where(e => e is not null)
+                    .Cast<string>()
+                    .ToList();
+            }
+            else if (lastConf["subscriptions"] is System.Text.Json.JsonElement subsElement &&
+                     subsElement.ValueKind == System.Text.Json.JsonValueKind.Array)
+            {
+                entity.Status.SubscribedEvents = subsElement
+                    .EnumerateArray()
+                    .Select(s => s.TryGetProperty("event_type", out var et) ? et.GetString() : null)
                     .Where(e => e is not null)
                     .Cast<string>()
                     .ToList();
             }
 
             await base.ApplyStatus(api, entity, lastConf, defaultNamespace, cancellationToken);
+        }
+
+        /// <summary>
+        /// Gets a nested object value from various container types.
+        /// </summary>
+        private static object? GetNestedValue(object? container, string key)
+        {
+            return container switch
+            {
+                Hashtable ht => ht[key],
+                IDictionary<string, object> dict => dict.TryGetValue(key, out var val) ? val : null,
+                System.Text.Json.JsonElement je when je.ValueKind == System.Text.Json.JsonValueKind.Object =>
+                    je.TryGetProperty(key, out var prop) ? (object)prop : null,
+                _ => null
+            };
+        }
+
+        /// <summary>
+        /// Gets a string value from various container types.
+        /// </summary>
+        private static string? GetStringValue(object? container, string key)
+        {
+            var value = GetNestedValue(container, key);
+            return value switch
+            {
+                string s => s,
+                System.Text.Json.JsonElement je when je.ValueKind == System.Text.Json.JsonValueKind.String => je.GetString(),
+                _ => value?.ToString()
+            };
         }
 
         /// <inheritdoc />

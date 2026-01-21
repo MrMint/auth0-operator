@@ -80,6 +80,28 @@ spec:
       - client_credentials
 ```
 
+#### Enable connections from the client
+
+Clients can declaratively enable or disable Auth0 connections via `spec.conf.enabled_connections`. The operator will reconcile the list by enabling new connections and disabling any that are removed.
+
+```
+apiVersion: kubernetes.auth0.com/v1
+kind: Client
+metadata:
+  name: example-client
+  namespace: example
+spec:
+  tenantRef:
+    name: example-tenant
+  conf:
+    name: example-client
+    app_type: spa
+    enabled_connections:
+      - name: google-workspace
+        namespace: shared-connections
+      - name: username-password
+```
+
 ## Client Secret
 
 The Client resource supports an optional `secretRef` field which can point to either an existing secret (not implemented) or the name of a secret to be created with the extraction of the `client_id` and `client_secret` values from the app.

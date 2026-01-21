@@ -56,6 +56,9 @@ namespace Alethic.Auth0.Operator.Models
             [JsonConverter(typeof(SimplePrimitiveHashtableConverter))]
             public Hashtable? LastConf { get; set; }
 
+            [JsonPropertyName("lastEnabledConnectionIds")]
+            public string[]? LastEnabledConnectionIds { get; set; }
+
         }
 
     }

@@ -8,76 +8,90 @@ spec:
     kind: Auth0Role
     listKind: Auth0RoleList
     plural: auth0roles
-    singular: auth0role
     shortNames:
-      - a0role
+    - a0role
+    singular: auth0role
   scope: Namespaced
   versions:
-    - name: v1
-      served: true
-      storage: true
-      schema:
-        openAPIV3Schema:
-          type: object
-          properties:
-            spec:
-              type: object
-              required:
-                - tenantRef
-                - conf
-              properties:
-                policy:
-                  type: array
-                  items:
-                    type: string
-                    enum:
-                      - Create
-                      - Update
-                      - Delete
-                tenantRef:
-                  type: object
-                  required:
-                    - name
-                  properties:
-                    namespace:
-                      type: string
-                    name:
-                      type: string
-                find:
-                  type: object
-                  properties:
-                    id:
-                      type: string
-                    nameFilter:
-                      type: string
-                init:
-                  type: object
-                  properties:
-                    name:
-                      type: string
-                    description:
-                      type: string
-                conf:
-                  type: object
-                  properties:
-                    name:
-                      type: string
-                    description:
-                      type: string
-            status:
-              type: object
-              properties:
-                id:
+  - name: v1
+    schema:
+      openAPIV3Schema:
+        properties:
+          status:
+            properties:
+              id:
+                nullable: true
+                type: string
+              lastConf:
+                nullable: true
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
+            type: object
+          spec:
+            properties:
+              policy:
+                items:
+                  enum:
+                  - Create
+                  - Update
+                  - Delete
                   type: string
-                lastConf:
-                  type: object
-                  x-kubernetes-preserve-unknown-fields: true
-      subresources:
-        status: {}
-      additionalPrinterColumns:
-        - name: Id
-          type: string
-          jsonPath: .status.id
-        - name: Age
-          type: date
-          jsonPath: .metadata.creationTimestamp
+                nullable: true
+                type: array
+              tenantRef:
+                nullable: true
+                properties:
+                  namespace:
+                    nullable: true
+                    type: string
+                  name:
+                    nullable: true
+                    type: string
+                required:
+                - name
+                type: object
+              find:
+                nullable: true
+                properties:
+                  id:
+                    nullable: true
+                    type: string
+                  nameFilter:
+                    nullable: true
+                    type: string
+                type: object
+              init:
+                nullable: true
+                properties:
+                  id:
+                    nullable: true
+                    type: string
+                  name:
+                    nullable: true
+                    type: string
+                  description:
+                    nullable: true
+                    type: string
+                type: object
+              conf:
+                nullable: true
+                properties:
+                  id:
+                    nullable: true
+                    type: string
+                  name:
+                    nullable: true
+                    type: string
+                  description:
+                    nullable: true
+                    type: string
+                type: object
+            required:
+            - tenantRef
+            - conf
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

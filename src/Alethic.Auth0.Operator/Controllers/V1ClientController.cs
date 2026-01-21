@@ -1,10 +1,12 @@
-﻿using System.Collections;
+﻿using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
 
+using Alethic.Auth0.Operator.Core.Models;
 using Alethic.Auth0.Operator.Core.Models.Client;
 using Alethic.Auth0.Operator.Models;
 using Alethic.Auth0.Operator.Options;
@@ -12,6 +14,7 @@ using Alethic.Auth0.Operator.Options;
 using Auth0.Core.Exceptions;
 using Auth0.ManagementApi;
 using Auth0.ManagementApi.Models;
+using Auth0.ManagementApi.Models.Connections;
 
 using k8s.Models;
 
@@ -30,6 +33,7 @@ namespace Alethic.Auth0.Operator.Controllers
 
     [EntityRbac(typeof(V1Tenant), Verbs = RbacVerb.List | RbacVerb.Get)]
     [EntityRbac(typeof(V1Client), Verbs = RbacVerb.All)]
+    [EntityRbac(typeof(V1Connection), Verbs = RbacVerb.List | RbacVerb.Get | RbacVerb.Update)]
     [EntityRbac(typeof(V1Secret), Verbs = RbacVerb.All)]
     [EntityRbac(typeof(Eventsv1Event), Verbs = RbacVerb.All)]
     public class V1ClientController :
@@ -149,6 +153,13 @@ namespace Alethic.Auth0.Operator.Controllers
                 await ApplySecret(entity, clientId, clientSecret, defaultNamespace, cancellationToken);
             }
 
+            // Handle enabled connections (add new ones and remove old ones)
+            var clientId2 = (string?)lastConf["client_id"];
+            if (clientId2 is not null)
+            {
+                await ReconcileEnabledConnections(api, entity, clientId2, defaultNamespace, cancellationToken);
+            }
+
             lastConf.Remove("client_id");
             lastConf.Remove("client_secret");
             await base.ApplyStatus(api, entity, lastConf, defaultNamespace, cancellationToken);
@@ -222,9 +233,189 @@ namespace Alethic.Auth0.Operator.Controllers
             }
         }
 
+        /// <summary>
+        /// Attempts to resolve the list of connection references to connection IDs.
+        /// </summary>
+        /// <param name="api"></param>
+        /// <param name="refs"></param>
+        /// <param name="defaultNamespace"></param>
+        /// <param name="cancellationToken"></param>
+        /// <returns></returns>
+        async Task<string[]?> ResolveConnectionRefsToIds(IManagementApiClient api, V1ConnectionReference[]? refs, string defaultNamespace, CancellationToken cancellationToken)
+        {
+            if (refs is null || refs.Length == 0)
+                return Array.Empty<string>();
+
+            var l = new List<string>(refs.Length);
+
+            foreach (var i in refs)
+                l.Add(await ResolveConnectionRefToId(api, i, defaultNamespace, cancellationToken) ?? throw new InvalidOperationException());
+
+            return l.ToArray();
+        }
+
+        /// <summary>
+        /// Reconciles enabled connections by comparing current desired state with previous state,
+        /// enabling new connections and disabling removed ones.
+        /// </summary>
+        /// <param name="api"></param>
+        /// <param name="entity"></param>
+        /// <param name="clientId"></param>
+        /// <param name="defaultNamespace"></param>
+        /// <param name="cancellationToken"></param>
+        /// <returns></returns>
+        async Task ReconcileEnabledConnections(IManagementApiClient api, V1Client entity, string clientId, string defaultNamespace, CancellationToken cancellationToken)
+        {
+            var conf = entity.Spec.Conf;
+            var currentConnectionRefs = conf?.EnabledConnections ?? Array.Empty<V1ConnectionReference>();
+            var previousConnectionIds = entity.Status.LastEnabledConnectionIds ?? Array.Empty<string>();
+
+            // Resolve current connection references to IDs
+            string[] currentConnectionIds;
+            try
+            {
+                currentConnectionIds = await ResolveConnectionRefsToIds(api, currentConnectionRefs, defaultNamespace, cancellationToken) ?? Array.Empty<string>();
+                currentConnectionIds = currentConnectionIds
+                    .Where(id => string.IsNullOrWhiteSpace(id) == false)
+                    .Distinct()
+                    .OrderBy(id => id, StringComparer.Ordinal)
+                    .ToArray();
+            }
+            catch (RetryException)
+            {
+                // Connection not ready yet, will retry later
+                Logger.LogWarning("{EntityTypeName} {ClientId} one or more referenced connections are not ready, will retry", EntityTypeName, clientId);
+                throw;
+            }
+
+            // Find connections to enable (in current but not in previous)
+            var normalizedPreviousConnectionIds = previousConnectionIds
+                .Where(id => string.IsNullOrWhiteSpace(id) == false)
+                .Distinct()
+                .OrderBy(id => id, StringComparer.Ordinal)
+                .ToArray();
+
+            var connectionsToEnable = currentConnectionIds.Except(normalizedPreviousConnectionIds).ToArray();
+            
+            // Find connections to disable (in previous but not in current)
+            var connectionsToDisable = normalizedPreviousConnectionIds.Except(currentConnectionIds).ToArray();
+
+            // Enable new connections
+            var failures = new List<Exception>();
+
+            foreach (var connectionId in connectionsToEnable)
+            {
+                try
+                {
+                    await EnableClientOnConnection(api, clientId, connectionId, cancellationToken);
+                }
+                catch (Exception ex)
+                {
+                    failures.Add(ex);
+                }
+            }
+
+            // Disable removed connections
+            foreach (var connectionId in connectionsToDisable)
+            {
+                try
+                {
+                    await DisableClientOnConnection(api, clientId, connectionId, cancellationToken);
+                }
+                catch (Exception ex)
+                {
+                    failures.Add(ex);
+                }
+            }
+
+            if (failures.Count > 0)
+                throw new AggregateException("One or more enabled connections could not be reconciled.", failures);
+
+            // Update status to track current state
+            entity.Status.LastEnabledConnectionIds = currentConnectionIds;
+        }
+
+        /// <summary>
+        /// Enables this client on a specific connection.
+        /// </summary>
+        /// <param name="api"></param>
+        /// <param name="clientId"></param>
+        /// <param name="connectionId"></param>
+        /// <param name="cancellationToken"></param>
+        /// <returns></returns>
+        async Task EnableClientOnConnection(IManagementApiClient api, string clientId, string connectionId, CancellationToken cancellationToken)
+        {
+            try
+            {
+                Logger.LogInformation("{EntityTypeName} {ClientId} enabling connection {ConnectionId}", EntityTypeName, clientId, connectionId);
+
+                var request = new EnabledClientsUpdateRequest
+                {
+                    EnabledClients = new[]
+                    {
+                        new EnabledClientsToUpdate
+                        {
+                            ClientId = clientId,
+                            Status = true
+                        }
+                    }
+                };
+
+                await api.Connections.UpdateEnabledClientsAsync(connectionId, request, cancellationToken);
+                Logger.LogInformation("{EntityTypeName} {ClientId} successfully enabled connection {ConnectionId}", EntityTypeName, clientId, connectionId);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError(ex, "{EntityTypeName} {ClientId} failed to enable connection {ConnectionId}", EntityTypeName, clientId, connectionId);
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Disables this client on a specific connection.
+        /// </summary>
+        /// <param name="api"></param>
+        /// <param name="clientId"></param>
+        /// <param name="connectionId"></param>
+        /// <param name="cancellationToken"></param>
+        /// <returns></returns>
+        async Task DisableClientOnConnection(IManagementApiClient api, string clientId, string connectionId, CancellationToken cancellationToken)
+        {
+            try
+            {
+                Logger.LogInformation("{EntityTypeName} {ClientId} disabling connection {ConnectionId} (reason: removed from enabled_connections)", EntityTypeName, clientId, connectionId);
+
+                var request = new EnabledClientsUpdateRequest
+                {
+                    EnabledClients = new[]
+                    {
+                        new EnabledClientsToUpdate
+                        {
+                            ClientId = clientId,
+                            Status = false
+                        }
+                    }
+                };
+
+                await api.Connections.UpdateEnabledClientsAsync(connectionId, request, cancellationToken);
+                Logger.LogInformation("{EntityTypeName} {ClientId} successfully disabled connection {ConnectionId}", EntityTypeName, clientId, connectionId);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError(ex, "{EntityTypeName} {ClientId} failed to disable connection {ConnectionId}", EntityTypeName, clientId, connectionId);
+                throw;
+            }
+        }
+
         /// <inheritdoc />
         protected override async Task Delete(IManagementApiClient api, string id, CancellationToken cancellationToken)
         {
+            // Note: We don't explicitly disable connections here because:
+            // 1. The Delete method doesn't have access to the entity spec
+            // 2. Connections are managed declaratively during reconciliation via ReconcileEnabledConnections
+            // 3. If users want to clean up before deletion, they should remove enabled_connections from spec first,
+            //    which will trigger reconciliation to disable the connections, then delete the client
+
             Logger.LogInformation("{EntityTypeName} deleting client from Auth0 with ID: {ClientId} (reason: Kubernetes entity deleted)", EntityTypeName, id);
             await api.Clients.DeleteAsync(id, cancellationToken);
             Logger.LogInformation("{EntityTypeName} successfully deleted client from Auth0 with ID: {ClientId}", EntityTypeName, id);

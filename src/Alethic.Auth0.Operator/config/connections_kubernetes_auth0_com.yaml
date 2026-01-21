@@ -18,7 +18,6 @@ spec:
       openAPIV3Schema:
         properties:
           status:
-            nullable: false
             properties:
               id:
                 nullable: true
@@ -29,7 +28,6 @@ spec:
                 x-kubernetes-preserve-unknown-fields: true
             type: object
           spec:
-            nullable: false
             properties:
               policy:
                 items:
@@ -84,7 +82,6 @@ spec:
                     x-kubernetes-preserve-unknown-fields: true
                   realms:
                     items:
-                      nullable: false
                       type: string
                     nullable: true
                     type: array
@@ -135,7 +132,6 @@ spec:
                     x-kubernetes-preserve-unknown-fields: true
                   realms:
                     items:
-                      nullable: false
                       type: string
                     nullable: true
                     type: array

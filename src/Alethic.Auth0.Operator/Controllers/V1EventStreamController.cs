@@ -44,6 +44,47 @@ namespace Alethic.Auth0.Operator.Controllers
             IEntityController<V1EventStream>
     {
         /// <summary>
+        /// Converts EventStreamType enum to its API string value.
+        /// </summary>
+        private static string? ToApiString(EventStreamType? type) => type switch
+        {
+            EventStreamType.EventBridge => "eventbridge",
+            EventStreamType.Webhook => "webhook",
+            EventStreamType.Action => "action",
+            _ => null
+        };
+
+        /// <summary>
+        /// Converts EventStreamStatus enum to its API string value.
+        /// </summary>
+        private static string? ToApiString(EventStreamStatus? status) => status switch
+        {
+            EventStreamStatus.Enabled => "enabled",
+            EventStreamStatus.Disabled => "disabled",
+            _ => null
+        };
+
+        /// <summary>
+        /// Converts EventType enum to its API string value.
+        /// </summary>
+        private static string? ToApiString(EventType? eventType) => eventType switch
+        {
+            EventType.UserCreated => "user.created",
+            EventType.UserUpdated => "user.updated",
+            EventType.UserDeleted => "user.deleted",
+            EventType.OrganizationCreated => "organization.created",
+            EventType.OrganizationUpdated => "organization.updated",
+            EventType.OrganizationDeleted => "organization.deleted",
+            EventType.OrganizationMemberAdded => "organization.member.added",
+            EventType.OrganizationMemberDeleted => "organization.member.deleted",
+            EventType.OrganizationMemberRoleAssigned => "organization.member.role.assigned",
+            EventType.OrganizationMemberRoleDeleted => "organization.member.role.deleted",
+            EventType.OrganizationConnectionAdded => "organization.connection.added",
+            EventType.OrganizationConnectionUpdated => "organization.connection.updated",
+            EventType.OrganizationConnectionRemoved => "organization.connection.removed",
+            _ => null
+        };
+        /// <summary>
         /// Initializes a new instance.
         /// </summary>
         /// <param name="kube"></param>
@@ -149,20 +190,16 @@ namespace Alethic.Auth0.Operator.Controllers
             if (string.IsNullOrWhiteSpace(conf.Name))
                 return "missing a value for name";
 
-            if (string.IsNullOrWhiteSpace(conf.Type))
+            if (conf.Type is null)
                 return "missing a value for type (webhook, eventbridge, or action)";
-
-            var validTypes = new[] { "webhook", "eventbridge", "action" };
-            if (!validTypes.Contains(conf.Type.ToLowerInvariant()))
-                return "type must be 'webhook', 'eventbridge', or 'action'";
 
             if (conf.Sink is null)
                 return "missing sink configuration";
 
-            if (conf.Type.ToLowerInvariant() == "eventbridge" && conf.Sink.EventBridge is null)
+            if (conf.Type == EventStreamType.EventBridge && conf.Sink.EventBridge is null)
                 return "missing eventBridge sink configuration";
 
-            if (conf.Type.ToLowerInvariant() == "webhook" && conf.Sink.Webhook is null)
+            if (conf.Type == EventStreamType.Webhook && conf.Sink.Webhook is null)
                 return "missing webhook sink configuration";
 
             return null;
@@ -329,11 +366,11 @@ namespace Alethic.Auth0.Operator.Controllers
             var request = new EventStreamCreateRequest
             {
                 Name = conf.Name,
-                Status = conf.Status ?? "enabled",
+                Status = ToApiString(conf.Status) ?? "enabled",
                 Subscriptions = conf
                     .Subscriptions?.Select(s => new EventStreamSubscriptionRequest
                     {
-                        EventType = s.EventType,
+                        EventType = ToApiString(s.EventType),
                     })
                     .ToList(),
             };
@@ -355,11 +392,11 @@ namespace Alethic.Auth0.Operator.Controllers
             var request = new EventStreamUpdateRequest
             {
                 Name = conf.Name,
-                Status = conf.Status,
+                Status = ToApiString(conf.Status),
                 Subscriptions = conf
                     .Subscriptions?.Select(s => new EventStreamSubscriptionRequest
                     {
-                        EventType = s.EventType,
+                        EventType = ToApiString(s.EventType),
                     })
                     .ToList(),
             };
@@ -380,13 +417,13 @@ namespace Alethic.Auth0.Operator.Controllers
         {
             var destination = new EventStreamDestination
             {
-                Type = conf.Type?.ToLowerInvariant(),
+                Type = ToApiString(conf.Type),
                 Configuration = new EventStreamDestinationConfiguration(),
             };
 
-            switch (conf.Type?.ToLowerInvariant())
+            switch (conf.Type)
             {
-                case "webhook":
+                case EventStreamType.Webhook:
                     if (conf.Sink?.Webhook is { } webhook)
                     {
                         destination.Configuration.WebhookEndpoint = webhook.Url;
@@ -457,7 +494,7 @@ namespace Alethic.Auth0.Operator.Controllers
                     }
                     break;
 
-                case "eventbridge":
+                case EventStreamType.EventBridge:
                     if (conf.Sink?.EventBridge is { } eventBridge)
                     {
                         destination.Configuration.AwsAccountId = eventBridge.AwsAccountId;
@@ -465,7 +502,7 @@ namespace Alethic.Auth0.Operator.Controllers
                     }
                     break;
 
-                case "action":
+                case EventStreamType.Action:
                     // Action destination would need action_id configuration
                     // This is typically used for Auth0 Actions integration
                     break;

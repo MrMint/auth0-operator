@@ -5,6 +5,81 @@ using Alethic.Auth0.Operator.Core.Models;
 namespace Alethic.Auth0.Operator.Core.Models.EventStream
 {
     /// <summary>
+    /// EventStream destination types.
+    /// </summary>
+    [JsonConverter(typeof(JsonStringEnumConverter))]
+    public enum EventStreamType
+    {
+        [JsonStringEnumMemberName("eventbridge")]
+        EventBridge,
+
+        [JsonStringEnumMemberName("webhook")]
+        Webhook,
+
+        [JsonStringEnumMemberName("action")]
+        Action
+    }
+
+    /// <summary>
+    /// EventStream status values.
+    /// </summary>
+    [JsonConverter(typeof(JsonStringEnumConverter))]
+    public enum EventStreamStatus
+    {
+        [JsonStringEnumMemberName("enabled")]
+        Enabled,
+
+        [JsonStringEnumMemberName("disabled")]
+        Disabled
+    }
+
+    /// <summary>
+    /// Supported event types for EventStreams.
+    /// </summary>
+    [JsonConverter(typeof(JsonStringEnumConverter))]
+    public enum EventType
+    {
+        [JsonStringEnumMemberName("user.created")]
+        UserCreated,
+
+        [JsonStringEnumMemberName("user.updated")]
+        UserUpdated,
+
+        [JsonStringEnumMemberName("user.deleted")]
+        UserDeleted,
+
+        [JsonStringEnumMemberName("organization.created")]
+        OrganizationCreated,
+
+        [JsonStringEnumMemberName("organization.updated")]
+        OrganizationUpdated,
+
+        [JsonStringEnumMemberName("organization.deleted")]
+        OrganizationDeleted,
+
+        [JsonStringEnumMemberName("organization.member.added")]
+        OrganizationMemberAdded,
+
+        [JsonStringEnumMemberName("organization.member.deleted")]
+        OrganizationMemberDeleted,
+
+        [JsonStringEnumMemberName("organization.member.role.assigned")]
+        OrganizationMemberRoleAssigned,
+
+        [JsonStringEnumMemberName("organization.member.role.deleted")]
+        OrganizationMemberRoleDeleted,
+
+        [JsonStringEnumMemberName("organization.connection.added")]
+        OrganizationConnectionAdded,
+
+        [JsonStringEnumMemberName("organization.connection.updated")]
+        OrganizationConnectionUpdated,
+
+        [JsonStringEnumMemberName("organization.connection.removed")]
+        OrganizationConnectionRemoved
+    }
+
+    /// <summary>
     /// Find criteria for adopting existing Auth0 EventStreams.
     /// </summary>
     public class EventStreamFind
@@ -38,18 +113,18 @@ namespace Alethic.Auth0.Operator.Core.Models.EventStream
         public string? Name { get; set; }
 
         /// <summary>
-        /// The type of event stream destination: eventbridge or webhook.
+        /// The type of event stream destination: eventbridge, webhook, or action.
         /// </summary>
         [JsonPropertyName("type")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public string? Type { get; set; }
+        public EventStreamType? Type { get; set; }
 
         /// <summary>
-        /// The status of the event stream: enabled, disabled.
+        /// The status of the event stream: enabled or disabled.
         /// </summary>
         [JsonPropertyName("status")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public string? Status { get; set; }
+        public EventStreamStatus? Status { get; set; }
 
         /// <summary>
         /// List of event types to subscribe to.
@@ -72,11 +147,11 @@ namespace Alethic.Auth0.Operator.Core.Models.EventStream
     public class EventStreamSubscription
     {
         /// <summary>
-        /// The event type to subscribe to (e.g., user.created, user.updated).
+        /// The event type to subscribe to.
         /// </summary>
         [JsonPropertyName("eventType")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public string? EventType { get; set; }
+        public EventType? EventType { get; set; }
     }
 
     /// <summary>
@@ -137,28 +212,5 @@ namespace Alethic.Auth0.Operator.Core.Models.EventStream
         [JsonPropertyName("authorizationSecretRef")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         public SecretKeySelector? AuthorizationSecretRef { get; set; }
-    }
-
-    /// <summary>
-    /// Supported event types for EventStreams.
-    /// </summary>
-    public static class EventStreamEventTypes
-    {
-        // User events
-        public const string UserCreated = "user.created";
-        public const string UserUpdated = "user.updated";
-        public const string UserDeleted = "user.deleted";
-
-        // Organization events
-        public const string OrganizationCreated = "organization.created";
-        public const string OrganizationUpdated = "organization.updated";
-        public const string OrganizationDeleted = "organization.deleted";
-        public const string OrganizationMemberAdded = "organization.member.added";
-        public const string OrganizationMemberDeleted = "organization.member.deleted";
-        public const string OrganizationMemberRoleAssigned = "organization.member.role.assigned";
-        public const string OrganizationMemberRoleDeleted = "organization.member.role.deleted";
-        public const string OrganizationConnectionAdded = "organization.connection.added";
-        public const string OrganizationConnectionUpdated = "organization.connection.updated";
-        public const string OrganizationConnectionRemoved = "organization.connection.removed";
     }
 }

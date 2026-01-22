@@ -81,15 +81,36 @@ spec:
                     nullable: true
                     type: string
                   type:
+                    enum:
+                    - eventbridge
+                    - webhook
+                    - action
                     nullable: true
                     type: string
                   status:
+                    enum:
+                    - enabled
+                    - disabled
                     nullable: true
                     type: string
                   subscriptions:
                     items:
                       properties:
                         eventType:
+                          enum:
+                          - user.created
+                          - user.updated
+                          - user.deleted
+                          - organization.created
+                          - organization.updated
+                          - organization.deleted
+                          - organization.member.added
+                          - organization.member.deleted
+                          - organization.member.role.assigned
+                          - organization.member.role.deleted
+                          - organization.connection.added
+                          - organization.connection.updated
+                          - organization.connection.removed
                           nullable: true
                           type: string
                       type: object
@@ -134,15 +155,36 @@ spec:
                     nullable: true
                     type: string
                   type:
+                    enum:
+                    - eventbridge
+                    - webhook
+                    - action
                     nullable: true
                     type: string
                   status:
+                    enum:
+                    - enabled
+                    - disabled
                     nullable: true
                     type: string
                   subscriptions:
                     items:
                       properties:
                         eventType:
+                          enum:
+                          - user.created
+                          - user.updated
+                          - user.deleted
+                          - organization.created
+                          - organization.updated
+                          - organization.deleted
+                          - organization.member.added
+                          - organization.member.deleted
+                          - organization.member.role.assigned
+                          - organization.member.role.deleted
+                          - organization.connection.added
+                          - organization.connection.updated
+                          - organization.connection.removed
                           nullable: true
                           type: string
                       type: object

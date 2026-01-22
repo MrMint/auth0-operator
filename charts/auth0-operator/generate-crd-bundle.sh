@@ -3,7 +3,7 @@ set -e
 
 # Usage: generate-crd-bundle.sh <output-file>
 OUTPUT_FILE="$1"
-CRD_DIR="$(dirname "$0")/../../src/Alethic.Auth0.Operator/config"
+CRD_DIR="$(dirname "$0")/crds"
 
 # Remove existing bundle
 rm -f "$OUTPUT_FILE"

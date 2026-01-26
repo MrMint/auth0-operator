@@ -147,6 +147,32 @@ spec:
 
 The Client resource supports an optional `secretRef` field which can point to either an existing secret (not implemented) or the name of a secret to be created with the extraction of the `client_id` and `client_secret` values from the app.
 
+### JSON Format Output
+
+For integration with systems like AWS Secrets Manager (via ACK controller) that require credentials in a single JSON key, you can configure the secret output format:
+
+```yaml
+apiVersion: kubernetes.auth0.com/v1
+kind: Client
+metadata:
+  name: my-client
+spec:
+  tenantRef:
+    name: my-tenant
+  secretRef:
+    name: my-client-secret
+    format: json           # Enables JSON output
+    jsonKey: credentials   # Optional: key name for JSON (defaults to "credentials")
+  conf:
+    name: my-client
+    app_type: non_interactive
+```
+
+This produces a secret with:
+- `clientId`: The client ID (separate key for backward compatibility)
+- `clientSecret`: The client secret (separate key for backward compatibility)
+- `credentials`: JSON containing `{"clientId":"...","clientSecret":"..."}` (when format is "json")
+
 ## ResourceServer
 
 https://auth0.com/docs/get-started/apis

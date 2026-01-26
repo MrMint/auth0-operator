@@ -138,6 +138,38 @@ namespace Alethic.Auth0.Operator.Controllers
         }
 
         /// <summary>
+        /// Attempts to resolve the secret document referenced by the client secret reference.
+        /// </summary>
+        /// <param name="secretRef"></param>
+        /// <param name="defaultNamespace"></param>
+        /// <param name="cancellationToken"></param>
+        /// <returns></returns>
+        public async Task<V1Secret?> ResolveClientSecretRef(
+            V1ClientSecretReference? secretRef,
+            string defaultNamespace,
+            CancellationToken cancellationToken
+        )
+        {
+            if (secretRef is null)
+                return null;
+
+            if (string.IsNullOrWhiteSpace(secretRef.Name))
+                throw new InvalidOperationException($"Secret reference {secretRef} has no name.");
+
+            var ns = secretRef.NamespaceProperty ?? defaultNamespace;
+            if (string.IsNullOrWhiteSpace(ns))
+                throw new InvalidOperationException(
+                    $"Secret reference {secretRef} has no discovered namespace."
+                );
+
+            var secret = await _kube.GetAsync<V1Secret>(secretRef.Name, ns, cancellationToken);
+            if (secret is null)
+                return null;
+
+            return secret;
+        }
+
+        /// <summary>
         /// Attempts to resolve the tenant document referenced by the tenant reference.
         /// </summary>
         /// <param name="tenantRef"></param>

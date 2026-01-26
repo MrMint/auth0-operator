@@ -62,6 +62,16 @@ spec:
                     type: string
                   namespace:
                     type: string
+                  format:
+                    description: 'The format of the secret output. When set to "json", an additional key containing a JSON object with clientId and clientSecret will be added to the secret.'
+                    nullable: true
+                    type: string
+                    enum:
+                    - json
+                  jsonKey:
+                    description: 'The name of the key to use for the JSON-formatted credentials when format is "json". Defaults to "credentials" if not specified.'
+                    nullable: true
+                    type: string
                 type: object
               find:
                 nullable: true

@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -199,7 +200,7 @@ namespace Alethic.Auth0.Operator.Controllers
                 return;
 
             // find existing secret or create
-            var secret = await ResolveSecretRef(entity.Spec.SecretRef, entity.Spec.SecretRef.NamespaceProperty ?? defaultNamespace, cancellationToken);
+            var secret = await ResolveClientSecretRef(entity.Spec.SecretRef, entity.Spec.SecretRef.NamespaceProperty ?? defaultNamespace, cancellationToken);
             if (secret is null)
             {
                 Logger.LogInformation("{EntityTypeName} {EntityNamespace}/{EntityName} referenced secret {SecretName} which does not exist: creating.", EntityTypeName, entity.Namespace(), entity.Name(), entity.Spec.SecretRef.Name);
@@ -216,23 +217,34 @@ namespace Alethic.Auth0.Operator.Controllers
                 Logger.LogInformation("{EntityTypeName} {EntityNamespace}/{EntityName} referenced secret {SecretName}: updating.", EntityTypeName, entity.Namespace(), entity.Name(), entity.Spec.SecretRef.Name);
                 secret.StringData ??= new Dictionary<string, string>();
 
+                // Track the effective clientId and clientSecret values for JSON output
+                string effectiveClientId;
+                string effectiveClientSecret;
+
                 // Always set clientId if available
                 if (clientId is not null)
                 {
                     secret.StringData["clientId"] = clientId;
+                    effectiveClientId = clientId;
                     Logger.LogDebug("{EntityTypeName} {EntityNamespace}/{EntityName} updated secret {SecretName} with clientId", EntityTypeName, entity.Namespace(), entity.Name(), entity.Spec.SecretRef.Name);
                 }
                 else if (!secret.StringData.ContainsKey("clientId"))
                 {
                     // Initialize empty clientId field if not present and no value available
                     secret.StringData["clientId"] = "";
+                    effectiveClientId = "";
                     Logger.LogDebug("{EntityTypeName} {EntityNamespace}/{EntityName} initialized empty clientId in secret {SecretName}", EntityTypeName, entity.Namespace(), entity.Name(), entity.Spec.SecretRef.Name);
+                }
+                else
+                {
+                    effectiveClientId = secret.StringData["clientId"];
                 }
 
                 // Handle clientSecret - for existing clients, Auth0 API doesn't return the secret
                 if (clientSecret is not null)
                 {
                     secret.StringData["clientSecret"] = clientSecret;
+                    effectiveClientSecret = clientSecret;
                     Logger.LogDebug("{EntityTypeName} {EntityNamespace}/{EntityName} updated secret {SecretName} with clientSecret", EntityTypeName, entity.Namespace(), entity.Name(), entity.Spec.SecretRef.Name);
                 }
                 else if (!secret.StringData.ContainsKey("clientSecret"))
@@ -240,7 +252,25 @@ namespace Alethic.Auth0.Operator.Controllers
                     // Initialize empty clientSecret field if not present and no value available
                     // Note: For existing clients, Auth0 API doesn't return the secret value for security reasons
                     secret.StringData["clientSecret"] = "";
+                    effectiveClientSecret = "";
                     Logger.LogDebug("{EntityTypeName} {EntityNamespace}/{EntityName} initialized empty clientSecret in secret {SecretName} (Auth0 API does not return secrets for existing clients)", EntityTypeName, entity.Namespace(), entity.Name(), entity.Spec.SecretRef.Name);
+                }
+                else
+                {
+                    effectiveClientSecret = secret.StringData["clientSecret"];
+                }
+
+                // If format is "json", add a JSON key containing both clientId and clientSecret
+                if (string.Equals(entity.Spec.SecretRef.Format, "json", StringComparison.OrdinalIgnoreCase))
+                {
+                    var jsonKeyName = entity.Spec.SecretRef.JsonKey ?? "credentials";
+                    var credentialsJson = JsonSerializer.Serialize(new
+                    {
+                        clientId = effectiveClientId,
+                        clientSecret = effectiveClientSecret
+                    });
+                    secret.StringData[jsonKeyName] = credentialsJson;
+                    Logger.LogDebug("{EntityTypeName} {EntityNamespace}/{EntityName} updated secret {SecretName} with JSON key {JsonKeyName}", EntityTypeName, entity.Namespace(), entity.Name(), entity.Spec.SecretRef.Name, jsonKeyName);
                 }
 
                 secret = await Kube.UpdateAsync(secret, cancellationToken);

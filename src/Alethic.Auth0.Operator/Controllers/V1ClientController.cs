@@ -449,6 +449,24 @@ namespace Alethic.Auth0.Operator.Controllers
             entity.Status.PendingEnableConnectionIds = stillPendingEnable.Count > 0 ? stillPendingEnable.ToArray() : null;
             entity.Status.PendingDisableConnectionIds = stillPendingDisable.Count > 0 ? stillPendingDisable.ToArray() : null;
 
+            // If we have pending operations (rate limit or failures), persist status BEFORE throwing
+            // This ensures the pending state is saved to Kubernetes and will be retried on next reconciliation
+            var hasPendingOperations = stillPendingEnable.Count > 0 || stillPendingDisable.Count > 0 || otherFailures.Count > 0;
+            if (hasPendingOperations)
+            {
+                Logger.LogInformation(
+                    "{EntityTypeName} {ClientId} has pending connection operations (enable: {PendingEnable}, disable: {PendingDisable}, failures: {Failures}), persisting status before retry",
+                    EntityTypeName,
+                    clientId,
+                    stillPendingEnable.Count,
+                    stillPendingDisable.Count,
+                    otherFailures.Count
+                );
+                
+                // Persist the status to Kubernetes so pending operations survive the exception
+                await Kube.UpdateStatusAsync(entity, cancellationToken);
+            }
+
             // If we hit a rate limit, throw it to trigger proper handling with backoff
             // But first log any other failures so they're not silently dropped
             if (rateLimitException != null)

@@ -16,6 +16,10 @@ namespace Alethic.Auth0.Operator
 
         public static Task Main(string[] args)
         {
+            // Register custom TypeConverter for Go-style duration parsing (e.g., "10m", "1h30m")
+            // Must be called before configuration binding
+            GoStyleDurationTypeConverter.Register();
+
             var builder = Host.CreateApplicationBuilder(args);
             builder.Services.AddKubernetesOperator().RegisterComponents();
             builder.Services.AddMemoryCache();

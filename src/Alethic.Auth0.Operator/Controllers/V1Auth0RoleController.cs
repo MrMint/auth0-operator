@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using Alethic.Auth0.Operator.Core.Models.Role;
 using Alethic.Auth0.Operator.Models;
 using Alethic.Auth0.Operator.Options;
+using Alethic.Auth0.Operator.RateLimiting;
 
 using Auth0.Core.Exceptions;
 using Auth0.ManagementApi;
@@ -47,8 +48,20 @@ namespace Alethic.Auth0.Operator.Controllers
         /// <param name="cache"></param>
         /// <param name="logger"></param>
         /// <param name="options"></param>
-        public V1Auth0RoleController(IKubernetesClient kube, EntityRequeue<V1Auth0Role> requeue, IMemoryCache cache, ILogger<V1Auth0RoleController> logger, IOptions<OperatorOptions> options) :
-            base(kube, requeue, cache, logger, options)
+        /// <param name="clientFactory"></param>
+        /// <param name="rateLimiterService"></param>
+        /// <param name="reconciliationScheduler"></param>
+        public V1Auth0RoleController(
+            IKubernetesClient kube,
+            EntityRequeue<V1Auth0Role> requeue,
+            IMemoryCache cache,
+            ILogger<V1Auth0RoleController> logger,
+            IOptions<OperatorOptions> options,
+            IManagementApiClientFactory clientFactory,
+            IRateLimiterService rateLimiterService,
+            IReconciliationScheduler reconciliationScheduler
+        )
+            : base(kube, requeue, cache, logger, options, clientFactory, rateLimiterService, reconciliationScheduler)
         {
 
         }

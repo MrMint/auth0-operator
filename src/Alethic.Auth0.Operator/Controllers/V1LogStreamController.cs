@@ -10,6 +10,7 @@ using Alethic.Auth0.Operator.Core.Models;
 using Alethic.Auth0.Operator.Core.Models.LogStream;
 using Alethic.Auth0.Operator.Models;
 using Alethic.Auth0.Operator.Options;
+using Alethic.Auth0.Operator.RateLimiting;
 using Auth0.Core.Exceptions;
 using Auth0.ManagementApi;
 using Auth0.ManagementApi.Models;
@@ -50,14 +51,20 @@ namespace Alethic.Auth0.Operator.Controllers
         /// <param name="cache"></param>
         /// <param name="logger"></param>
         /// <param name="options"></param>
+        /// <param name="clientFactory"></param>
+        /// <param name="rateLimiterService"></param>
+        /// <param name="reconciliationScheduler"></param>
         public V1LogStreamController(
             IKubernetesClient kube,
             EntityRequeue<V1LogStream> requeue,
             IMemoryCache cache,
             ILogger<V1LogStreamController> logger,
-            IOptions<OperatorOptions> options
+            IOptions<OperatorOptions> options,
+            IManagementApiClientFactory clientFactory,
+            IRateLimiterService rateLimiterService,
+            IReconciliationScheduler reconciliationScheduler
         )
-            : base(kube, requeue, cache, logger, options) { }
+            : base(kube, requeue, cache, logger, options, clientFactory, rateLimiterService, reconciliationScheduler) { }
 
         /// <inheritdoc />
         protected override string EntityTypeName => "LogStream";
@@ -91,81 +98,76 @@ namespace Alethic.Auth0.Operator.Controllers
             CancellationToken cancellationToken
         )
         {
-            if (spec.Find is not null)
+            // If an ID is specified directly, try to find by ID first (no list needed)
+            if (spec.Find?.Id is string logStreamId)
             {
-                // If an ID is specified directly, try to find by ID
-                if (spec.Find.Id is string logStreamId)
+                try
                 {
-                    try
-                    {
-                        var logStream = await api.LogStreams.GetAsync(
-                            logStreamId,
-                            cancellationToken
-                        );
-                        Logger.LogInformation(
-                            "{EntityTypeName} {EntityNamespace}/{EntityName} found existing log stream by ID: {Name}",
-                            EntityTypeName,
-                            entity.Namespace(),
-                            entity.Name(),
-                            logStream.Name
-                        );
-                        return logStream.Id;
-                    }
-                    catch (ErrorApiException e) when (e.StatusCode == HttpStatusCode.NotFound)
-                    {
-                        Logger.LogInformation(
-                            "{EntityTypeName} {EntityNamespace}/{EntityName} could not find log stream with id {LogStreamId}.",
-                            EntityTypeName,
-                            entity.Namespace(),
-                            entity.Name(),
-                            logStreamId
-                        );
-                        return null;
-                    }
-                }
-
-                // If a name is specified, search by name
-                if (spec.Find.Name is string nameFilter)
-                {
-                    var logStreams = await api.LogStreams.GetAllAsync(cancellationToken);
-                    var logStream = logStreams.FirstOrDefault(ls => ls.Name == nameFilter);
-                    if (logStream is not null)
-                    {
-                        Logger.LogInformation(
-                            "{EntityTypeName} {EntityNamespace}/{EntityName} found existing log stream by name: {Name}",
-                            EntityTypeName,
-                            entity.Namespace(),
-                            entity.Name(),
-                            logStream.Name
-                        );
-                        return logStream.Id;
-                    }
+                    var logStream = await api.LogStreams.GetAsync(
+                        logStreamId,
+                        cancellationToken
+                    );
                     Logger.LogInformation(
-                        "{EntityTypeName} {EntityNamespace}/{EntityName} could not find log stream with name {Name}.",
+                        "{EntityTypeName} {EntityNamespace}/{EntityName} found existing log stream by ID: {Name}",
                         EntityTypeName,
                         entity.Namespace(),
                         entity.Name(),
-                        nameFilter
+                        logStream.Name
+                    );
+                    return logStream.Id;
+                }
+                catch (ErrorApiException e) when (e.StatusCode == HttpStatusCode.NotFound)
+                {
+                    Logger.LogInformation(
+                        "{EntityTypeName} {EntityNamespace}/{EntityName} could not find log stream with id {LogStreamId}.",
+                        EntityTypeName,
+                        entity.Namespace(),
+                        entity.Name(),
+                        logStreamId
                     );
                     return null;
                 }
+            }
 
-                return null;
+            // Determine name to search for
+            string? nameToFind = null;
+            if (spec.Find?.Name is string nameFilter)
+            {
+                nameToFind = nameFilter;
             }
             else
             {
-                // Default: search by name from conf
                 var conf = spec.Init ?? spec.Conf;
-                if (conf is null)
-                    return null;
-
-                if (string.IsNullOrWhiteSpace(conf.Name))
-                    return null;
-
-                var logStreams = await api.LogStreams.GetAllAsync(cancellationToken);
-                var self = logStreams.FirstOrDefault(ls => ls.Name == conf.Name);
-                return self?.Id;
+                nameToFind = conf?.Name;
             }
+
+            if (string.IsNullOrWhiteSpace(nameToFind))
+                return null;
+
+            // Single GetAllAsync call to search by name
+            var logStreams = await api.LogStreams.GetAllAsync(cancellationToken);
+            var self = logStreams.FirstOrDefault(ls => ls.Name == nameToFind);
+
+            if (self is not null)
+            {
+                Logger.LogInformation(
+                    "{EntityTypeName} {EntityNamespace}/{EntityName} found existing log stream by name: {Name}",
+                    EntityTypeName,
+                    entity.Namespace(),
+                    entity.Name(),
+                    self.Name
+                );
+                return self.Id;
+            }
+
+            Logger.LogInformation(
+                "{EntityTypeName} {EntityNamespace}/{EntityName} could not find log stream with name {Name}.",
+                EntityTypeName,
+                entity.Namespace(),
+                entity.Name(),
+                nameToFind
+            );
+            return null;
         }
 
         /// <inheritdoc />

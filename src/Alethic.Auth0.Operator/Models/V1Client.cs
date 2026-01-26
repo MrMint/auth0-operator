@@ -59,6 +59,20 @@ namespace Alethic.Auth0.Operator.Models
             [JsonPropertyName("lastEnabledConnectionIds")]
             public string[]? LastEnabledConnectionIds { get; set; }
 
+            /// <summary>
+            /// Connection IDs that need to be enabled but failed due to rate limits.
+            /// These will be retried on the next reconciliation.
+            /// </summary>
+            [JsonPropertyName("pendingEnableConnectionIds")]
+            public string[]? PendingEnableConnectionIds { get; set; }
+
+            /// <summary>
+            /// Connection IDs that need to be disabled but failed due to rate limits.
+            /// These will be retried on the next reconciliation.
+            /// </summary>
+            [JsonPropertyName("pendingDisableConnectionIds")]
+            public string[]? PendingDisableConnectionIds { get; set; }
+
         }
 
     }

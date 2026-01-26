@@ -6,6 +6,47 @@ This Auth0 Kubernetes Operator is responsible for managing the lifecycle of Auth
 
 It automates the deployment, configuration, and management of Auth0 resources, such as clients, connections, resource servers and more.
 
+## Architecture
+
+### Rate Limiting
+
+The operator implements a sophisticated rate limiting system to respect Auth0's API quotas and prevent 429 errors:
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        V1TenantEntityController                          │
+│  ┌────────────────────────────────────────────────────────────────────┐ │
+│  │ Reconcile() → IReconciliationScheduler.BeginReconcileAsync()       │ │
+│  │   • Startup spread (prevent thundering herd on restart)            │ │
+│  │   • Proactive throttling (defer when approaching limits)           │ │
+│  │   • Circuit breaker (defer when circuit is open)                   │ │
+│  └────────────────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                      Rate Limiting Components                            │
+├─────────────────┬─────────────────┬─────────────────┬───────────────────┤
+│ Reconciliation  │ Polly Resilience│ Rx.NET Streams  │ Rate Limiter      │
+│ Scheduler       │ Policies        │                 │ Service           │
+├─────────────────┼─────────────────┼─────────────────┼───────────────────┤
+│ • Startup spread│ • Rate limit    │ • Burst detect  │ • State tracking  │
+│ • Circuit check │   retry (3x)    │ • Circuit open  │ • Header parsing  │
+│ • Throttle check│ • Transient     │   recommendations│ • Proactive      │
+│                 │   retry (3x)    │                 │   throttling      │
+│                 │ • Circuit break │                 │                   │
+└─────────────────┴─────────────────┴─────────────────┴───────────────────┘
+```
+
+**Key Features:**
+- **Startup Spread**: On operator restart, reconciliations are spread over a configurable window (default 30s) using stable hashing to prevent all resources hitting the API simultaneously
+- **Proactive Throttling**: When rate limit headers indicate low remaining quota, reconciliations are deferred before hitting 429 errors
+- **Polly Resilience**: HTTP-level retry with exponential backoff for transient errors and rate limits
+- **Rx.NET Pattern Detection**: Detects burst patterns and recommends circuit opening when repeated rate limits are hit
+- **Per-Tenant Isolation**: Each Auth0 tenant has independent rate limit tracking and circuit state
+
+All rate limiting features are enabled by default and configured via `RateLimitOptions` in the operator configuration.
+
 ### Installation
 
 `helm install -n auth0 auth0 oci://ghcr.io/alethic/auth0-operator`

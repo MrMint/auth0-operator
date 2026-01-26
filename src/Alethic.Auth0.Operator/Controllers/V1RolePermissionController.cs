@@ -9,6 +9,7 @@ using Alethic.Auth0.Operator.Core.Models;
 using Alethic.Auth0.Operator.Core.Models.RolePermission;
 using Alethic.Auth0.Operator.Models;
 using Alethic.Auth0.Operator.Options;
+using Alethic.Auth0.Operator.RateLimiting;
 using Auth0.Core.Exceptions;
 using Auth0.ManagementApi;
 using Auth0.ManagementApi.Models;
@@ -51,14 +52,20 @@ namespace Alethic.Auth0.Operator.Controllers
         /// <param name="cache"></param>
         /// <param name="logger"></param>
         /// <param name="options"></param>
+        /// <param name="clientFactory"></param>
+        /// <param name="rateLimiterService"></param>
+        /// <param name="reconciliationScheduler"></param>
         public V1RolePermissionController(
             IKubernetesClient kube,
             EntityRequeue<V1RolePermission> requeue,
             IMemoryCache cache,
             ILogger<V1RolePermissionController> logger,
-            IOptions<OperatorOptions> options
+            IOptions<OperatorOptions> options,
+            IManagementApiClientFactory clientFactory,
+            IRateLimiterService rateLimiterService,
+            IReconciliationScheduler reconciliationScheduler
         )
-            : base(kube, requeue, cache, logger, options) { }
+            : base(kube, requeue, cache, logger, options, clientFactory, rateLimiterService, reconciliationScheduler) { }
 
         /// <inheritdoc />
         protected override string EntityTypeName => "RolePermission";

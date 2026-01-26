@@ -379,13 +379,75 @@
           "type": "string"
         },
         "reconciliation": {
-          "description": "Reconciliation settings",
+          "description": "Reconciliation behavior settings",
           "type": "object",
           "properties": {
             "interval": {
-              "description": "Reconciliation interval duration (e.g., '5m', '1h')",
+              "description": "Base interval between periodic reconciliation cycles (e.g., '10m', '600s')",
               "type": "string",
-              "pattern": "^[0-9]+(s|m|h)$"
+              "pattern": "^([0-9]+(s|m|h)?)?$"
+            },
+            "enableJitter": {
+              "description": "Enable jitter to spread reconciliations across time",
+              "type": "boolean",
+              "default": true
+            },
+            "maxJitter": {
+              "description": "Maximum jitter to add to reconciliation interval (e.g., '5m', '300s')",
+              "type": "string",
+              "pattern": "^([0-9]+(s|m|h)?)?$"
+            },
+            "enableStartupSpread": {
+              "description": "Enable spreading initial reconciliations on startup",
+              "type": "boolean",
+              "default": true
+            },
+            "startupSpreadWindow": {
+              "description": "Window over which to spread initial reconciliations (e.g., '2m', '120s')",
+              "type": "string",
+              "pattern": "^([0-9]+(s|m|h)?)?$"
+            },
+            "minThrottledInterval": {
+              "description": "Minimum interval when rate limited (e.g., '5m', '300s')",
+              "type": "string",
+              "pattern": "^([0-9]+(s|m|h)?)?$"
+            }
+          },
+          "additionalProperties": false
+        },
+        "rateLimit": {
+          "description": "Rate limiting options for Auth0 API calls",
+          "type": "object",
+          "properties": {
+            "enableProactiveThrottling": {
+              "description": "Enable proactive throttling based on X-RateLimit headers",
+              "type": "boolean",
+              "default": true
+            },
+            "throttledReconciliationIntervalSeconds": {
+              "description": "Reconciliation interval when approaching rate limits (seconds)",
+              "type": "integer",
+              "minimum": 1,
+              "default": 300
+            },
+            "minRateLimitDelaySeconds": {
+              "description": "Minimum delay after hitting rate limit (seconds)",
+              "type": "integer",
+              "minimum": 1,
+              "default": 60
+            },
+            "defaultTier": {
+              "description": "Default tier assumption for new tenants",
+              "type": "string",
+              "enum": ["SelfService", "Enterprise"],
+              "default": "SelfService"
+            },
+            "targetRequestsPerMinute": {
+              "description": "Target requests per minute for pacing",
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 30
             }
           },
           "additionalProperties": false

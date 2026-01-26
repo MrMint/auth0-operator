@@ -59,9 +59,51 @@ spec:
             - name: Auth0__Operator__Namespace
               value: {{ .Values.options.namespace | quote }}
 {{ end }}
+{{/* Reconciliation Options */}}
 {{ if .Values.options.reconciliation.interval }}
             - name: Auth0__Operator__Reconciliation__Interval
               value: {{ .Values.options.reconciliation.interval | quote }}
+{{ end }}
+{{ if not (eq .Values.options.reconciliation.enableJitter true) }}
+            - name: Auth0__Operator__Reconciliation__EnableJitter
+              value: {{ .Values.options.reconciliation.enableJitter | quote }}
+{{ end }}
+{{ if .Values.options.reconciliation.maxJitter }}
+            - name: Auth0__Operator__Reconciliation__MaxJitter
+              value: {{ .Values.options.reconciliation.maxJitter | quote }}
+{{ end }}
+{{ if not (eq .Values.options.reconciliation.enableStartupSpread true) }}
+            - name: Auth0__Operator__Reconciliation__EnableStartupSpread
+              value: {{ .Values.options.reconciliation.enableStartupSpread | quote }}
+{{ end }}
+{{ if .Values.options.reconciliation.startupSpreadWindow }}
+            - name: Auth0__Operator__Reconciliation__StartupSpreadWindow
+              value: {{ .Values.options.reconciliation.startupSpreadWindow | quote }}
+{{ end }}
+{{ if .Values.options.reconciliation.minThrottledInterval }}
+            - name: Auth0__Operator__Reconciliation__MinThrottledInterval
+              value: {{ .Values.options.reconciliation.minThrottledInterval | quote }}
+{{ end }}
+{{/* Rate Limit Options */}}
+{{ if not (eq .Values.options.rateLimit.enableProactiveThrottling true) }}
+            - name: Auth0__Operator__RateLimit__EnableProactiveThrottling
+              value: {{ .Values.options.rateLimit.enableProactiveThrottling | quote }}
+{{ end }}
+{{ if ne (int .Values.options.rateLimit.throttledReconciliationIntervalSeconds) 300 }}
+            - name: Auth0__Operator__RateLimit__ThrottledReconciliationIntervalSeconds
+              value: {{ .Values.options.rateLimit.throttledReconciliationIntervalSeconds | quote }}
+{{ end }}
+{{ if ne (int .Values.options.rateLimit.minRateLimitDelaySeconds) 60 }}
+            - name: Auth0__Operator__RateLimit__MinRateLimitDelaySeconds
+              value: {{ .Values.options.rateLimit.minRateLimitDelaySeconds | quote }}
+{{ end }}
+{{ if and .Values.options.rateLimit.defaultTier (ne .Values.options.rateLimit.defaultTier "SelfService") }}
+            - name: Auth0__Operator__RateLimit__DefaultTier
+              value: {{ .Values.options.rateLimit.defaultTier | quote }}
+{{ end }}
+{{ if ne (int .Values.options.rateLimit.targetRequestsPerMinute) 30 }}
+            - name: Auth0__Operator__RateLimit__TargetRequestsPerMinute
+              value: {{ .Values.options.rateLimit.targetRequestsPerMinute | quote }}
 {{ end }}
 {{ range .Values.operator.env }}
             - name: {{ .name | quote }}

@@ -106,8 +106,56 @@ operator:
 
 # Various configuration options.
 options:
-    # Limit operation to the single specified namespace. This can be used to install a namespace-specific instance of the operator.
-    # NOT YET SUPORTED
-    #namespace:
+  # Limit operation to the single specified namespace. This can be used to install a namespace-specific instance of the operator.
+  # NOT YET SUPPORTED
+  # namespace: "my-namespace"
+
+  # Reconciliation behavior options
   reconciliation:
-    interval:
+    # Base interval between periodic reconciliation cycles for drift detection.
+    # CRD changes are still reconciled immediately via watch events.
+    # Default: 10m
+    # interval: "10m"
+    
+    # Enable jitter to spread reconciliations across time.
+    # When enabled, each entity gets a deterministic offset based on its name.
+    enableJitter: true
+    
+    # Maximum jitter to add to reconciliation interval.
+    # Entities will be spread across [0, MaxJitter) window.
+    # Default: 5m
+    # maxJitter: "5m"
+    
+    # Enable spreading initial reconciliations when operator starts.
+    # This prevents a thundering herd on operator startup.
+    enableStartupSpread: true
+    
+    # Window over which to spread initial reconciliations on startup.
+    # Default: 2m
+    # startupSpreadWindow: "2m"
+    
+    # Minimum interval between reconciliations when rate limited.
+    # Default: 5m
+    # minThrottledInterval: "5m"
+
+  # Rate limiting options for Auth0 API calls
+  # Based on Auth0 Self Service Management API limits (25-200 requests/minute per endpoint)
+  rateLimit:
+    # Enable proactive throttling based on X-RateLimit headers.
+    # When enabled, the operator will slow down when approaching rate limits.
+    enableProactiveThrottling: true
+    
+    # Reconciliation interval when approaching rate limits (seconds).
+    throttledReconciliationIntervalSeconds: 300
+    
+    # Minimum delay after hitting rate limit (seconds).
+    minRateLimitDelaySeconds: 60
+    
+    # Default tier assumption for new tenants (SelfService or Enterprise).
+    # Affects initial rate limit estimates before first API response.
+    defaultTier: "SelfService"
+    
+    # Target requests per minute for pacing.
+    # Auth0 Self Service allows 25-200 requests/minute per endpoint.
+    # Conservative default to stay well under limits.
+    targetRequestsPerMinute: 30

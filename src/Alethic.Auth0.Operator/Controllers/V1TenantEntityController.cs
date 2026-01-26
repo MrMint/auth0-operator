@@ -1,9 +1,12 @@
 ﻿using System;
 using System.Collections;
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Alethic.Auth0.Operator.Models;
 using Alethic.Auth0.Operator.Options;
+using Alethic.Auth0.Operator.RateLimiting;
 using Auth0.Core.Exceptions;
 using Auth0.ManagementApi;
 using k8s;
@@ -24,6 +27,8 @@ namespace Alethic.Auth0.Operator.Controllers
         where TConf : class
     {
         readonly IOptions<OperatorOptions> _options;
+        readonly IRateLimiterService _rateLimiterService;
+        readonly IReconciliationScheduler _reconciliationScheduler;
 
         /// <summary>
         /// Holds the current tenant API context during reconciliation and deletion.
@@ -45,17 +50,31 @@ namespace Alethic.Auth0.Operator.Controllers
         /// <param name="cache"></param>
         /// <param name="logger"></param>
         /// <param name="options"></param>
+        /// <param name="clientFactory"></param>
+        /// <param name="rateLimiterService"></param>
+        /// <param name="reconciliationScheduler"></param>
         public V1TenantEntityController(
             IKubernetesClient kube,
             EntityRequeue<TEntity> requeue,
             IMemoryCache cache,
             ILogger logger,
-            IOptions<OperatorOptions> options
+            IOptions<OperatorOptions> options,
+            IManagementApiClientFactory clientFactory,
+            IRateLimiterService rateLimiterService,
+            IReconciliationScheduler reconciliationScheduler
         )
-            : base(kube, requeue, cache, logger)
+            : base(kube, requeue, cache, logger, clientFactory, options)
         {
             _options = options ?? throw new ArgumentNullException(nameof(options));
+            _rateLimiterService = rateLimiterService ?? throw new ArgumentNullException(nameof(rateLimiterService));
+            _reconciliationScheduler = reconciliationScheduler ?? throw new ArgumentNullException(nameof(reconciliationScheduler));
         }
+
+        /// <summary>
+        /// Gets the estimated number of API calls for a reconciliation of this entity type.
+        /// Override in derived classes for more accurate throttling.
+        /// </summary>
+        protected virtual int EstimatedApiCalls => 2;
 
         /// <summary>
         /// Attempts to perform a get operation through the API.
@@ -130,9 +149,21 @@ namespace Alethic.Auth0.Operator.Controllers
             CancellationToken cancellationToken
         );
 
-        /// <inheritdoc />
-        protected override async Task Reconcile(TEntity entity, CancellationToken cancellationToken)
+        /// <summary>
+        /// Computes a stable, non-negative hash for the given key using SHA256.
+        /// </summary>
+        private static int ComputeStableHash(string key)
         {
+            var hashBytes = SHA256.HashData(Encoding.UTF8.GetBytes(key));
+            // Mask with int.MaxValue to ensure non-negative result
+            return BitConverter.ToInt32(hashBytes, 0) & int.MaxValue;
+        }
+
+        /// <inheritdoc />
+        protected override async Task<bool> Reconcile(TEntity entity, CancellationToken cancellationToken)
+        {
+            var entityKey = $"{entity.Namespace()}/{entity.Name()}";
+
             if (entity.Spec.TenantRef is null)
                 throw new InvalidOperationException(
                     $"{EntityTypeName} {entity.Namespace()}/{entity.Name()} missing a tenant reference."
@@ -153,12 +184,37 @@ namespace Alethic.Auth0.Operator.Controllers
                     $"{EntityTypeName} {entity.Namespace()}/{entity.Name()} missing a tenant."
                 );
 
+            // Build tenant key for rate limiting
+            var tenantKey = $"{tenant.Namespace()}/{tenant.Name()}";
+
+            // Use centralized scheduler for startup spread and proactive throttling decisions
+            var schedulingDecision = await _reconciliationScheduler.BeginReconcileAsync(
+                entityKey, tenantKey, EstimatedApiCalls, cancellationToken);
+            
+            if (!schedulingDecision.ShouldProceed)
+            {
+                Logger.LogDebug(
+                    "{EntityTypeName} {Namespace}/{Name} reconciliation deferred: {Reason}, will retry in {DelaySeconds:F1}s",
+                    EntityTypeName,
+                    entity.Namespace(),
+                    entity.Name(),
+                    schedulingDecision.Reason,
+                    schedulingDecision.Delay?.TotalSeconds ?? 0
+                );
+
+                Requeue(entity, schedulingDecision.Delay ?? TimeSpan.FromMinutes(1));
+                
+                // Return false to indicate reconciliation was deferred (no success event)
+                return false;
+            }
+
             // Get the full API context (includes client, token, and baseUri)
             var context = await GetTenantApiContextAsync(tenant, cancellationToken);
             var api = context.Client;
 
             // Store the context for subclasses that need access to token/baseUri (e.g., EventStreamController)
             _currentApiContext.Value = context;
+            var reconcileSuccess = false;
             try
             {
                 // ensure we hold a reference to the tenant
@@ -202,7 +258,8 @@ namespace Alethic.Auth0.Operator.Controllers
                                 entity.Namespace(),
                                 entity.Name()
                             );
-                            return;
+                            reconcileSuccess = true; // No-op but successful
+                            return true; // No actual reconciliation work to do, but not deferred
                         }
 
                         // validate configuration version used for initialization
@@ -307,19 +364,51 @@ namespace Alethic.Auth0.Operator.Controllers
                 entity = await Kube.UpdateStatusAsync(entity, cancellationToken);
 
                 // schedule periodic reconciliation to detect external changes (e.g., manual deletion from Auth0)
-                var interval = _options.Value.Reconciliation.Interval;
+                var baseInterval = _options.Value.Reconciliation.Interval;
+
+                // Add deterministic jitter based on entity name hash to spread reconciliations
+                var jitter = TimeSpan.Zero;
+                if (_options.Value.Reconciliation.EnableJitter)
+                {
+                    var maxJitterMs = (int)_options.Value.Reconciliation.MaxJitter.TotalMilliseconds;
+                    if (maxJitterMs > 0)
+                    {
+                        var hash = ComputeStableHash(entityKey);
+                        var jitterMs = hash % maxJitterMs;
+                        jitter = TimeSpan.FromMilliseconds(jitterMs);
+                    }
+                }
+
+                // Add rate limit recommended delay if approaching limits
+                var rateLimitDelay = _rateLimiterService.GetRecommendedDelay(tenantKey);
+                
+                // Apply minimum throttled interval if rate limit delay is requested
+                if (rateLimitDelay > TimeSpan.Zero)
+                {
+                    var minThrottled = _options.Value.Reconciliation.MinThrottledInterval;
+                    rateLimitDelay = rateLimitDelay > minThrottled ? rateLimitDelay : minThrottled;
+                }
+
+                var interval = baseInterval + jitter + rateLimitDelay;
                 Logger.LogDebug(
-                    "{EntityTypeName} {Namespace}/{Name} scheduling next reconciliation in {IntervalSeconds}s",
+                    "{EntityTypeName} {Namespace}/{Name} scheduling next reconciliation in {IntervalSeconds:F1}s (base: {BaseSeconds}s, jitter: {JitterMs}ms, rateLimitDelay: {RateLimitDelayMs}ms)",
                     EntityTypeName,
                     entity.Namespace(),
                     entity.Name(),
-                    interval.TotalSeconds
+                    interval.TotalSeconds,
+                    baseInterval.TotalSeconds,
+                    jitter.TotalMilliseconds,
+                    rateLimitDelay.TotalMilliseconds
                 );
                 Requeue(entity, interval);
+                
+                reconcileSuccess = true;
+                return true; // Reconciliation completed successfully
             }
             finally
             {
                 _currentApiContext.Value = null;
+                _reconciliationScheduler.EndReconcile(entityKey, reconcileSuccess);
             }
         }
 
@@ -495,12 +584,13 @@ namespace Alethic.Auth0.Operator.Controllers
                     Logger.LogCritical(e2, "Unexpected exception creating event.");
                 }
 
-                // calculate next attempt time, floored to one minute
+                // Calculate next attempt time using configured minimum
+                var minDelay = TimeSpan.FromSeconds(_options.Value.RateLimit.MinRateLimitDelaySeconds);
                 var n = e.RateLimit?.Reset is DateTimeOffset r
                     ? r - DateTimeOffset.Now
-                    : TimeSpan.FromMinutes(1);
-                if (n < TimeSpan.FromMinutes(1))
-                    n = TimeSpan.FromMinutes(1);
+                    : minDelay;
+                if (n < minDelay)
+                    n = minDelay;
 
                 Logger.LogInformation("Rescheduling delete after {TimeSpan}.", n);
                 Requeue(entity, n);

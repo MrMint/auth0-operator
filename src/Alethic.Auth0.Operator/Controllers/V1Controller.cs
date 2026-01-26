@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Diagnostics.CodeAnalysis;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -9,6 +10,8 @@ using System.Threading.Tasks;
 using Alethic.Auth0.Operator.Core.Extensions;
 using Alethic.Auth0.Operator.Core.Models;
 using Alethic.Auth0.Operator.Models;
+using Alethic.Auth0.Operator.Options;
+using Alethic.Auth0.Operator.RateLimiting;
 using Auth0.AuthenticationApi;
 using Auth0.AuthenticationApi.Models;
 using Auth0.Core.Exceptions;
@@ -21,6 +24,7 @@ using KubeOps.Abstractions.Queue;
 using KubeOps.KubernetesClient;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Newtonsoft.Json;
 
 namespace Alethic.Auth0.Operator.Controllers
@@ -52,6 +56,8 @@ namespace Alethic.Auth0.Operator.Controllers
         readonly EntityRequeue<TEntity> _requeue;
         readonly IMemoryCache _cache;
         readonly ILogger _logger;
+        readonly IManagementApiClientFactory _clientFactory;
+        readonly IOptions<OperatorOptions> _baseOptions;
 
         /// <summary>
         /// Initializes a new instance.
@@ -60,17 +66,23 @@ namespace Alethic.Auth0.Operator.Controllers
         /// <param name="requeue"></param>
         /// <param name="cache"></param>
         /// <param name="logger"></param>
+        /// <param name="clientFactory"></param>
+        /// <param name="options"></param>
         public V1Controller(
             IKubernetesClient kube,
             EntityRequeue<TEntity> requeue,
             IMemoryCache cache,
-            ILogger logger
+            ILogger logger,
+            IManagementApiClientFactory clientFactory,
+            IOptions<OperatorOptions> options
         )
         {
             _cache = cache ?? throw new ArgumentNullException(nameof(cache));
             _kube = kube ?? throw new ArgumentNullException(nameof(kube));
             _requeue = requeue ?? throw new ArgumentNullException(nameof(requeue));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            _clientFactory = clientFactory ?? throw new ArgumentNullException(nameof(clientFactory));
+            _baseOptions = options ?? throw new ArgumentNullException(nameof(options));
         }
 
         /// <summary>
@@ -514,12 +526,23 @@ namespace Alethic.Auth0.Operator.Controllers
                             $"Tenant {tenant.Namespace()}/{tenant.Name()} failed to retrieve management API token."
                         );
 
-                    // contact API using token and domain
+                    // contact API using token and domain with rate limit tracking
                     var baseUri = new Uri($"https://{domain}/api/v2/");
-                    var client = new ManagementApiClient(authToken.AccessToken, baseUri);
+                    var tenantKey = $"{tenant.Namespace()}/{tenant.Name()}";
+                    var client = _clientFactory.Create(authToken.AccessToken, baseUri, tenantKey);
 
-                    // cache API context for 1 minute
-                    entry.SetAbsoluteExpiration(TimeSpan.FromMinutes(1));
+                    // Cache API context based on token expiration
+                    // Auth0 tokens typically expire in 24 hours (86400 seconds)
+                    // Use 90% of the expiration time to ensure we refresh before expiry
+                    // Fall back to 1 hour if ExpiresIn is not provided or is too short
+                    var expiresInSeconds = authToken.ExpiresIn > 0 ? authToken.ExpiresIn : 3600;
+                    var cacheSeconds = Math.Max(60, (int)(expiresInSeconds * 0.9)); // At least 1 minute, 90% of expiry
+                    entry.SetAbsoluteExpiration(TimeSpan.FromSeconds(cacheSeconds));
+                    
+                    Logger.LogDebug(
+                        "Cached API context for tenant {TenantKey}, expires in {ExpiresIn}s, cache duration {CacheDuration}s",
+                        tenantKey, expiresInSeconds, cacheSeconds);
+                    
                     return new TenantApiContext(client, authToken.AccessToken, baseUri);
                 }
             );
@@ -683,11 +706,12 @@ namespace Alethic.Auth0.Operator.Controllers
         }
 
         /// <summary>
-        /// Implement this method to attempt the reconcillation.
+        /// Implement this method to attempt the reconciliation.
         /// </summary>
         /// <param name="entity"></param>
         /// <param name="cancellationToken"></param>
-        protected abstract Task Reconcile(TEntity entity, CancellationToken cancellationToken);
+        /// <returns>True if reconciliation completed and success should be recorded; false if deferred/no-op.</returns>
+        protected abstract Task<bool> Reconcile(TEntity entity, CancellationToken cancellationToken);
 
         /// <inheritdoc />
         public async Task ReconcileAsync(TEntity entity, CancellationToken cancellationToken)
@@ -700,9 +724,13 @@ namespace Alethic.Auth0.Operator.Controllers
                     );
 
                 // does the actual work of reconciling
-                await Reconcile(entity, cancellationToken);
+                var completed = await Reconcile(entity, cancellationToken);
 
-                await ReconcileSuccessAsync(entity, cancellationToken);
+                // Only record success if reconciliation actually completed (not deferred)
+                if (completed)
+                {
+                    await ReconcileSuccessAsync(entity, cancellationToken);
+                }
             }
             catch (ErrorApiException e)
             {
@@ -750,15 +778,64 @@ namespace Alethic.Auth0.Operator.Controllers
                     Logger.LogCritical(e2, "Unexpected exception creating event.");
                 }
 
-                // calculate next attempt time, floored to one minute
+                // Calculate next attempt time using config minimum
+                var minDelaySeconds = _baseOptions.Value.RateLimit.MinRateLimitDelaySeconds;
+                var minDelay = TimeSpan.FromSeconds(minDelaySeconds);
                 var n = e.RateLimit?.Reset is DateTimeOffset r
                     ? r - DateTimeOffset.Now
-                    : TimeSpan.FromMinutes(1);
-                if (n < TimeSpan.FromMinutes(1))
-                    n = TimeSpan.FromMinutes(1);
+                    : minDelay;
+                if (n < minDelay)
+                    n = minDelay;
 
                 Logger.LogInformation("Rescheduling reconcilation after {TimeSpan}.", n);
                 Requeue(entity, n);
+            }
+            catch (AggregateException ae) when (RateLimitExceptionHandler.ContainsRateLimitException(ae))
+            {
+                // Handle rate limit exceptions wrapped in AggregateException (e.g., from batch operations)
+                var rateLimitEx = RateLimitExceptionHandler.ExtractRateLimitException(ae);
+                try
+                {
+                    Logger.LogError(
+                        "Rate limit hit during batch operation reconciling {EntityTypeName} {EntityNamespace}/{EntityName}",
+                        EntityTypeName,
+                        entity.Namespace(),
+                        entity.Name()
+                    );
+                    await ReconcileWarningAsync(
+                        entity,
+                        "RateLimit",
+                        rateLimitEx?.ApiError?.Message ?? "Rate limit exceeded during batch operation",
+                        cancellationToken
+                    );
+
+                    // Log other exceptions that were in the aggregate
+                    foreach (var inner in ae.InnerExceptions)
+                    {
+                        if (inner is not RateLimitApiException)
+                        {
+                            Logger.LogError(
+                                inner,
+                                "Additional error during batch operation for {EntityTypeName} {EntityNamespace}/{EntityName}",
+                                EntityTypeName,
+                                entity.Namespace(),
+                                entity.Name()
+                            );
+                        }
+                    }
+                }
+                catch (Exception e2)
+                {
+                    Logger.LogCritical(e2, "Unexpected exception creating event.");
+                }
+
+                // Calculate next attempt time using the rate limit reset header with config minimum
+                var minDelaySeconds = _baseOptions.Value.RateLimit.MinRateLimitDelaySeconds;
+                var minDelay = TimeSpan.FromSeconds(minDelaySeconds);
+                var delay = RateLimitExceptionHandler.GetDelayUntilReset(rateLimitEx, minDelay);
+
+                Logger.LogInformation("Rescheduling reconciliation after {TimeSpan} due to rate limit in batch operation.", delay);
+                Requeue(entity, delay);
             }
             catch (RetryException e)
             {

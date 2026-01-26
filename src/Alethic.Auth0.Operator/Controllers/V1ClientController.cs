@@ -10,6 +10,7 @@ using Alethic.Auth0.Operator.Core.Models;
 using Alethic.Auth0.Operator.Core.Models.Client;
 using Alethic.Auth0.Operator.Models;
 using Alethic.Auth0.Operator.Options;
+using Alethic.Auth0.Operator.RateLimiting;
 
 using Auth0.Core.Exceptions;
 using Auth0.ManagementApi;
@@ -49,14 +50,32 @@ namespace Alethic.Auth0.Operator.Controllers
         /// <param name="cache"></param>
         /// <param name="logger"></param>
         /// <param name="options"></param>
-        public V1ClientController(IKubernetesClient kube, EntityRequeue<V1Client> requeue, IMemoryCache cache, ILogger<V1ClientController> logger, IOptions<OperatorOptions> options) :
-            base(kube, requeue, cache, logger, options)
+        /// <param name="clientFactory"></param>
+        /// <param name="rateLimiterService"></param>
+        /// <param name="reconciliationScheduler"></param>
+        public V1ClientController(
+            IKubernetesClient kube,
+            EntityRequeue<V1Client> requeue,
+            IMemoryCache cache,
+            ILogger<V1ClientController> logger,
+            IOptions<OperatorOptions> options,
+            IManagementApiClientFactory clientFactory,
+            IRateLimiterService rateLimiterService,
+            IReconciliationScheduler reconciliationScheduler
+        )
+            : base(kube, requeue, cache, logger, options, clientFactory, rateLimiterService, reconciliationScheduler)
         {
 
         }
 
         /// <inheritdoc />
         protected override string EntityTypeName => "Client";
+
+        /// <summary>
+        /// Clients can make many API calls due to enabled_connections reconciliation.
+        /// Estimate: 2 base + up to 10 for connection enable/disable operations.
+        /// </summary>
+        protected override int EstimatedApiCalls => 12;
 
         /// <inheritdoc />
         protected override async Task<Hashtable?> Get(IManagementApiClient api, string id, string defaultNamespace, CancellationToken cancellationToken)
@@ -270,6 +289,10 @@ namespace Alethic.Auth0.Operator.Controllers
             var currentConnectionRefs = conf?.EnabledConnections ?? Array.Empty<V1ConnectionReference>();
             var previousConnectionIds = entity.Status.LastEnabledConnectionIds ?? Array.Empty<string>();
 
+            // Include any pending operations from previous reconciliation attempts
+            var pendingEnableIds = entity.Status.PendingEnableConnectionIds ?? Array.Empty<string>();
+            var pendingDisableIds = entity.Status.PendingDisableConnectionIds ?? Array.Empty<string>();
+
             // Resolve current connection references to IDs
             string[] currentConnectionIds;
             try
@@ -288,51 +311,145 @@ namespace Alethic.Auth0.Operator.Controllers
                 throw;
             }
 
-            // Find connections to enable (in current but not in previous)
+            // Find connections to enable (in current but not in previous, plus pending from previous attempts)
             var normalizedPreviousConnectionIds = previousConnectionIds
                 .Where(id => string.IsNullOrWhiteSpace(id) == false)
                 .Distinct()
                 .OrderBy(id => id, StringComparer.Ordinal)
                 .ToArray();
 
-            var connectionsToEnable = currentConnectionIds.Except(normalizedPreviousConnectionIds).ToArray();
-            
-            // Find connections to disable (in previous but not in current)
-            var connectionsToDisable = normalizedPreviousConnectionIds.Except(currentConnectionIds).ToArray();
+            var connectionsToEnable = currentConnectionIds
+                .Except(normalizedPreviousConnectionIds)
+                .Union(pendingEnableIds)
+                .Distinct()
+                .ToList();
+
+            // Find connections to disable (in previous but not in current, plus pending from previous attempts)
+            var connectionsToDisable = normalizedPreviousConnectionIds
+                .Except(currentConnectionIds)
+                .Union(pendingDisableIds)
+                .Distinct()
+                .ToList();
+
+            // Track results
+            var enabledSuccessfully = new List<string>();
+            var disabledSuccessfully = new List<string>();
+            var stillPendingEnable = new List<string>();
+            var stillPendingDisable = new List<string>();
+            RateLimitApiException? rateLimitException = null;
+            var otherFailures = new List<Exception>();
 
             // Enable new connections
-            var failures = new List<Exception>();
-
             foreach (var connectionId in connectionsToEnable)
             {
                 try
                 {
                     await EnableClientOnConnection(api, clientId, connectionId, cancellationToken);
+                    enabledSuccessfully.Add(connectionId);
+                }
+                catch (RateLimitApiException ex)
+                {
+                    rateLimitException ??= ex; // Keep the first one for timing info
+                    stillPendingEnable.Add(connectionId);
+                    Logger.LogWarning("{EntityTypeName} {ClientId} hit rate limit enabling connection {ConnectionId}, will retry", EntityTypeName, clientId, connectionId);
+                    // Stop processing more enables on rate limit
+                    break;
                 }
                 catch (Exception ex)
                 {
-                    failures.Add(ex);
+                    otherFailures.Add(ex);
                 }
             }
 
-            // Disable removed connections
-            foreach (var connectionId in connectionsToDisable)
+            // Add remaining connections to pending if we hit a rate limit
+            if (rateLimitException != null)
             {
-                try
-                {
-                    await DisableClientOnConnection(api, clientId, connectionId, cancellationToken);
-                }
-                catch (Exception ex)
-                {
-                    failures.Add(ex);
-                }
+                var processedCount = enabledSuccessfully.Count + stillPendingEnable.Count + otherFailures.Count;
+                var remaining = connectionsToEnable.Skip(processedCount).ToList();
+                stillPendingEnable.AddRange(remaining);
             }
 
-            if (failures.Count > 0)
-                throw new AggregateException("One or more enabled connections could not be reconciled.", failures);
+            // Disable removed connections (only if we haven't hit a rate limit)
+            if (rateLimitException == null)
+            {
+                foreach (var connectionId in connectionsToDisable)
+                {
+                    try
+                    {
+                        await DisableClientOnConnection(api, clientId, connectionId, cancellationToken);
+                        disabledSuccessfully.Add(connectionId);
+                    }
+                    catch (RateLimitApiException ex)
+                    {
+                        rateLimitException ??= ex;
+                        stillPendingDisable.Add(connectionId);
+                        Logger.LogWarning("{EntityTypeName} {ClientId} hit rate limit disabling connection {ConnectionId}, will retry", EntityTypeName, clientId, connectionId);
+                        break;
+                    }
+                    catch (Exception ex)
+                    {
+                        otherFailures.Add(ex);
+                    }
+                }
 
-            // Update status to track current state
-            entity.Status.LastEnabledConnectionIds = currentConnectionIds;
+                // Add remaining connections to pending if we hit a rate limit
+                if (rateLimitException != null)
+                {
+                    var processedCount = disabledSuccessfully.Count + stillPendingDisable.Count;
+                    var remaining = connectionsToDisable.Skip(processedCount).ToList();
+                    stillPendingDisable.AddRange(remaining);
+                }
+            }
+            else
+            {
+                // All disable operations are pending since we already hit rate limit
+                stillPendingDisable.AddRange(connectionsToDisable);
+            }
+
+            // Update status with partial progress
+            // This ensures we don't lose track of what was successfully enabled/disabled
+            var newEnabledList = normalizedPreviousConnectionIds
+                .Except(disabledSuccessfully)
+                .Union(enabledSuccessfully)
+                .Distinct()
+                .OrderBy(id => id, StringComparer.Ordinal)
+                .ToArray();
+
+            entity.Status.LastEnabledConnectionIds = newEnabledList;
+            entity.Status.PendingEnableConnectionIds = stillPendingEnable.Count > 0 ? stillPendingEnable.ToArray() : null;
+            entity.Status.PendingDisableConnectionIds = stillPendingDisable.Count > 0 ? stillPendingDisable.ToArray() : null;
+
+            // If we hit a rate limit, throw it to trigger proper handling with backoff
+            // But first log any other failures so they're not silently dropped
+            if (rateLimitException != null)
+            {
+                if (otherFailures.Count > 0)
+                {
+                    Logger.LogWarning(
+                        "{EntityTypeName} {ClientId} had {FailureCount} non-rate-limit failures that will be retried after rate limit backoff",
+                        EntityTypeName,
+                        clientId,
+                        otherFailures.Count
+                    );
+                    foreach (var failure in otherFailures)
+                    {
+                        Logger.LogWarning(
+                            failure,
+                            "{EntityTypeName} {ClientId} deferred failure: {Message}",
+                            EntityTypeName,
+                            clientId,
+                            failure.Message
+                        );
+                    }
+                }
+                throw rateLimitException;
+            }
+
+            // If there were other failures, throw aggregate exception
+            if (otherFailures.Count > 0)
+            {
+                throw new AggregateException("One or more enabled connections could not be reconciled.", otherFailures);
+            }
         }
 
         /// <summary>

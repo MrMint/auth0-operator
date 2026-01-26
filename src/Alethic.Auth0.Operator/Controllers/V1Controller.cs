@@ -787,6 +787,13 @@ namespace Alethic.Auth0.Operator.Controllers
                 {
                     Logger.LogCritical(e2, "Unexpected exception creating event.");
                 }
+
+                // Requeue after API errors - these are often transient (network issues, Auth0 outages, etc.)
+                Logger.LogInformation(
+                    "Rescheduling reconciliation after {TimeSpan} due to API error.",
+                    TimeSpan.FromMinutes(1)
+                );
+                Requeue(entity, TimeSpan.FromMinutes(1));
             }
             catch (RateLimitApiException e)
             {

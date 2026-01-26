@@ -387,7 +387,10 @@ namespace Alethic.Auth0.Operator.Controllers
                 }
                 catch (Exception ex)
                 {
+                    // Track the failure AND mark the connection as pending for retry
                     otherFailures.Add(ex);
+                    stillPendingEnable.Add(connectionId);
+                    Logger.LogWarning(ex, "{EntityTypeName} {ClientId} failed to enable connection {ConnectionId}, will retry", EntityTypeName, clientId, connectionId);
                 }
             }
 
@@ -418,7 +421,10 @@ namespace Alethic.Auth0.Operator.Controllers
                     }
                     catch (Exception ex)
                     {
+                        // Track the failure AND mark the connection as pending for retry
                         otherFailures.Add(ex);
+                        stillPendingDisable.Add(connectionId);
+                        Logger.LogWarning(ex, "{EntityTypeName} {ClientId} failed to disable connection {ConnectionId}, will retry", EntityTypeName, clientId, connectionId);
                     }
                 }
 
@@ -449,6 +455,24 @@ namespace Alethic.Auth0.Operator.Controllers
             entity.Status.PendingEnableConnectionIds = stillPendingEnable.Count > 0 ? stillPendingEnable.ToArray() : null;
             entity.Status.PendingDisableConnectionIds = stillPendingDisable.Count > 0 ? stillPendingDisable.ToArray() : null;
 
+            // If we have pending operations (rate limit or failures), persist status BEFORE throwing
+            // This ensures the pending state is saved to Kubernetes and will be retried on next reconciliation
+            var hasPendingOperations = stillPendingEnable.Count > 0 || stillPendingDisable.Count > 0 || otherFailures.Count > 0;
+            if (hasPendingOperations)
+            {
+                Logger.LogInformation(
+                    "{EntityTypeName} {ClientId} has pending connection operations (enable: {PendingEnable}, disable: {PendingDisable}, failures: {Failures}), persisting status before retry",
+                    EntityTypeName,
+                    clientId,
+                    stillPendingEnable.Count,
+                    stillPendingDisable.Count,
+                    otherFailures.Count
+                );
+                
+                // Persist the status to Kubernetes so pending operations survive the exception
+                await Kube.UpdateStatusAsync(entity, cancellationToken);
+            }
+
             // If we hit a rate limit, throw it to trigger proper handling with backoff
             // But first log any other failures so they're not silently dropped
             if (rateLimitException != null)
@@ -475,10 +499,12 @@ namespace Alethic.Auth0.Operator.Controllers
                 throw rateLimitException;
             }
 
-            // If there were other failures, throw aggregate exception
+            // If there were other failures, throw RetryException to trigger proper requeue
+            // (AggregateException would fall through to generic exception handler which doesn't requeue)
             if (otherFailures.Count > 0)
             {
-                throw new AggregateException("One or more enabled connections could not be reconciled.", otherFailures);
+                var errorMessages = string.Join("; ", otherFailures.Select(e => e.Message));
+                throw new RetryException($"One or more enabled connections could not be reconciled: {errorMessages}");
             }
         }
 

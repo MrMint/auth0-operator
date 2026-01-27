@@ -200,6 +200,15 @@ namespace Alethic.Auth0.Operator.Controllers
             // name has to be cleared for an update
             req.Name = null!;
 
+            // Preserve enabled_clients from Auth0 if not explicitly specified in spec.conf
+            // This prevents the Connection controller from removing clients that were enabled
+            // by the Client controller (enabled_clients is managed by Client, not Connection)
+            if (conf.EnabledClients is null && last?["enabled_clients"] is IEnumerable<object> existingClients)
+            {
+                req.EnabledClients = existingClients.OfType<string>().ToArray();
+                Logger.LogDebug("{EntityTypeName} preserving {Count} existing enabled_clients for connection {ConnectionId}", EntityTypeName, req.EnabledClients.Length, id);
+            }
+
             // calculate options: depends on current strategy, possibly null, which means no apply
             var strategy = last?["strategy"] as string ?? conf.Strategy;
             var options = strategy == "auth0" && conf.Options is not null ? (dynamic?)TransformToNewtonsoftJson<ConnectionOptions, global::Auth0.ManagementApi.Models.Connections.ConnectionOptions>(JsonSerializer.Deserialize<ConnectionOptions>(JsonSerializer.Serialize(conf.Options))) : conf.Options;

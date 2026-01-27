@@ -17,6 +17,7 @@ using Auth0.Core.Exceptions;
 using Auth0.ManagementApi;
 using Auth0.ManagementApi.Models;
 using Auth0.ManagementApi.Models.Connections;
+using Auth0.ManagementApi.Paging;
 
 using k8s.Models;
 
@@ -387,22 +388,15 @@ namespace Alethic.Auth0.Operator.Controllers
                 throw;
             }
 
+            // Get ALL connections where this client is currently enabled by querying Auth0 directly
+            // Using GetAllAsync ensures we detect drift (manual enables) and is more efficient than N calls
+            var actuallyEnabledConnectionIds = await GetActuallyEnabledConnections(api, clientId, cancellationToken);
+
             // Intersect pending operations with current desired state to handle spec changes during retry
             // If a connection was removed from spec, don't retry enabling it
             // If a connection was added to spec, don't retry disabling it
             var validPendingEnableIds = pendingEnableIds.Intersect(desiredConnectionIds).ToArray();
             var validPendingDisableIds = pendingDisableIds.Except(desiredConnectionIds).ToArray();
-
-            // Determine which connections we need to query Auth0 for
-            // We need to check: desired connections (to see if they need enabling) + valid pending disables (to verify they're still enabled)
-            var connectionIdsToCheck = desiredConnectionIds
-                .Union(validPendingDisableIds)
-                .Distinct()
-                .ToArray();
-
-            // Get the ACTUAL currently enabled connections by querying Auth0 directly
-            // This avoids staleness from Connection CRD status which isn't updated when Client controller enables/disables
-            var actuallyEnabledConnectionIds = await GetActuallyEnabledConnections(api, clientId, connectionIdsToCheck, cancellationToken);
 
             // Connections to enable: desired but not actually enabled, plus any valid pending retries
             var connectionsToEnable = desiredConnectionIds
@@ -639,38 +633,32 @@ namespace Alethic.Auth0.Operator.Controllers
         }
 
         /// <summary>
-        /// Gets the Auth0 connection IDs where this client is actually enabled by querying Auth0 directly.
-        /// This queries the Management API to get fresh data, avoiding staleness from Connection CRD status.
+        /// Gets ALL Auth0 connection IDs where this client is currently enabled by querying Auth0 directly.
+        /// Uses a single GetAllAsync call to avoid N+1 API calls and detect drift from manual changes.
         /// </summary>
         /// <param name="api">Auth0 Management API client</param>
         /// <param name="clientId">The Auth0 client ID to check for</param>
-        /// <param name="connectionIds">The connection IDs to check</param>
         /// <param name="cancellationToken"></param>
-        /// <returns>Connection IDs where this client is currently enabled in Auth0</returns>
-        async Task<string[]> GetActuallyEnabledConnections(IManagementApiClient api, string clientId, IEnumerable<string> connectionIds, CancellationToken cancellationToken)
+        /// <returns>All connection IDs where this client is currently enabled in Auth0</returns>
+        async Task<string[]> GetActuallyEnabledConnections(IManagementApiClient api, string clientId, CancellationToken cancellationToken)
         {
-            var enabledOn = new List<string>();
+            // Get all connections in one API call - this is more efficient than N individual calls
+            // and ensures we detect drift (connections enabled outside of the operator)
+            var allConnections = await api.Connections.GetAllAsync(new GetConnectionsRequest(), (PaginationInfo?)null, cancellationToken);
 
-            foreach (var connectionId in connectionIds)
+            var enabledOn = new List<string>();
+            foreach (var connection in allConnections)
             {
-                try
+                if (connection?.EnabledClients != null && connection.EnabledClients.Contains(clientId))
                 {
-                    var connection = await api.Connections.GetAsync(connectionId, cancellationToken: cancellationToken);
-                    if (connection?.EnabledClients != null && connection.EnabledClients.Contains(clientId))
-                    {
-                        enabledOn.Add(connectionId);
-                        Logger.LogDebug("{EntityTypeName} {ClientId} GetActuallyEnabledConnections: Found enabled on {ConnectionId} ({ConnectionName})",
-                            EntityTypeName, clientId, connectionId, connection.Name);
-                    }
+                    enabledOn.Add(connection.Id);
+                    Logger.LogDebug("{EntityTypeName} {ClientId} GetActuallyEnabledConnections: Found enabled on {ConnectionId} ({ConnectionName})",
+                        EntityTypeName, clientId, connection.Id, connection.Name);
                 }
-                catch (ErrorApiException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
-                {
-                    // Connection doesn't exist in Auth0 - skip it
-                    Logger.LogWarning("{EntityTypeName} {ClientId} GetActuallyEnabledConnections: Connection {ConnectionId} not found in Auth0, skipping",
-                        EntityTypeName, clientId, connectionId);
-                }
-                // Other exceptions propagate up to trigger retry
             }
+
+            Logger.LogDebug("{EntityTypeName} {ClientId} GetActuallyEnabledConnections: Client is enabled on {Count} connections out of {Total} total",
+                EntityTypeName, clientId, enabledOn.Count, allConnections.Count);
 
             return enabledOn.ToArray();
         }

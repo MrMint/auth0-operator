@@ -239,7 +239,10 @@ namespace Alethic.Auth0.Operator.Controllers
 
         /// <summary>
         /// Aggregates enabled client IDs from all Client CRDs that reference this connection.
-        /// Uses label-based indexing for efficient lookups, plus fallback for ID-based references.
+        /// Uses label-based indexing for efficient lookups, plus ID-based reference fallback.
+        /// 
+        /// Note: Race conditions (Client without labels yet) are handled by ClientConnectionWatcherService,
+        /// which re-triggers Connection reconciliation when a Client becomes ready or its labels change.
         /// </summary>
         /// <param name="crdName">The Connection CRD's metadata.name</param>
         /// <param name="crdNamespace">The Connection CRD's metadata.namespace</param>
@@ -261,6 +264,10 @@ namespace Alethic.Auth0.Operator.Controllers
                 clients = clients.Concat(clientsByIdRef).ToList();
             }
 
+            // Note: We do NOT need a fallback spec scan here. The ClientConnectionWatcherService
+            // handles the race condition by re-triggering Connection reconciliation when a Client
+            // becomes "ready" (gets its Auth0 ID). This is more efficient than scanning all Clients.
+
             var enabledClientIds = new List<string>();
             foreach (var client in clients)
             {
@@ -275,6 +282,9 @@ namespace Alethic.Auth0.Operator.Controllers
                 Logger.LogDebug("{EntityTypeName} including Client {ClientNamespace}/{ClientName} (Auth0 ID: {ClientId}) in enabled_clients",
                     EntityTypeName, client.Namespace(), client.Name(), client.Status.Id);
             }
+
+            Logger.LogDebug("{EntityTypeName} aggregated {Count} enabled_clients for connection {ConnNamespace}/{ConnName}",
+                EntityTypeName, enabledClientIds.Count, crdNamespace, crdName);
 
             // Use OrderBy for deterministic ordering, then Distinct
             return enabledClientIds.Distinct().OrderBy(id => id).ToArray();

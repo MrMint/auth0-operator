@@ -3,6 +3,8 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -16,8 +18,6 @@ using Alethic.Auth0.Operator.RateLimiting;
 using Auth0.Core.Exceptions;
 using Auth0.ManagementApi;
 using Auth0.ManagementApi.Models;
-using Auth0.ManagementApi.Models.Connections;
-using Auth0.ManagementApi.Paging;
 
 using k8s.Models;
 
@@ -36,7 +36,7 @@ namespace Alethic.Auth0.Operator.Controllers
 
     [EntityRbac(typeof(V1Tenant), Verbs = RbacVerb.List | RbacVerb.Get)]
     [EntityRbac(typeof(V1Client), Verbs = RbacVerb.All)]
-    [EntityRbac(typeof(V1Connection), Verbs = RbacVerb.List | RbacVerb.Get | RbacVerb.Update)]
+    [EntityRbac(typeof(V1Connection), Verbs = RbacVerb.List | RbacVerb.Get)]
     [EntityRbac(typeof(V1Secret), Verbs = RbacVerb.All)]
     [EntityRbac(typeof(Eventsv1Event), Verbs = RbacVerb.All)]
     public class V1ClientController :
@@ -74,10 +74,10 @@ namespace Alethic.Auth0.Operator.Controllers
         protected override string EntityTypeName => "Client";
 
         /// <summary>
-        /// Clients can make many API calls due to enabled_connections reconciliation.
-        /// Estimate: 2 base + up to 10 for connection enable/disable operations.
+        /// Base API calls for client operations (get/create/update).
+        /// Note: enabled_clients is now managed by Connection controller.
         /// </summary>
-        protected override int EstimatedApiCalls => 12;
+        protected override int EstimatedApiCalls => 2;
 
         /// <inheritdoc />
         protected override async Task<Hashtable?> Get(IManagementApiClient api, string id, string defaultNamespace, CancellationToken cancellationToken)
@@ -165,7 +165,6 @@ namespace Alethic.Auth0.Operator.Controllers
         /// <inheritdoc />
         protected override async Task ApplyStatus(IManagementApiClient api, V1Client entity, Hashtable lastConf, string defaultNamespace, CancellationToken cancellationToken)
         {
-            // Diagnostic: Log entry into ApplyStatus
             Logger.LogDebug("{EntityTypeName} {EntityNamespace}/{EntityName} ApplyStatus: entering, lastConf has {KeyCount} keys",
                 EntityTypeName, entity.Namespace(), entity.Name(), lastConf?.Count ?? 0);
 
@@ -178,24 +177,124 @@ namespace Alethic.Auth0.Operator.Controllers
                 await ApplySecret(entity, clientId, clientSecret, defaultNamespace, cancellationToken);
             }
 
-            // Handle enabled connections (add new ones and remove old ones)
-            var clientId2 = (string?)lastConf["client_id"];
-            Logger.LogDebug("{EntityTypeName} {EntityNamespace}/{EntityName} ApplyStatus: client_id from lastConf = {ClientId}",
-                EntityTypeName, entity.Namespace(), entity.Name(), clientId2 ?? "(null)");
-
-            if (clientId2 is not null)
-            {
-                await ReconcileEnabledConnections(api, entity, clientId2, defaultNamespace, cancellationToken);
-            }
-            else
-            {
-                Logger.LogWarning("{EntityTypeName} {EntityNamespace}/{EntityName} ApplyStatus: skipping ReconcileEnabledConnections because client_id is null in lastConf",
-                    EntityTypeName, entity.Namespace(), entity.Name());
-            }
+            // Apply labels for connection references to enable efficient reverse lookups
+            // Connection controller uses these labels to find clients referencing a specific connection
+            await ApplyConnectionLabels(entity, defaultNamespace, cancellationToken);
 
             lastConf.Remove("client_id");
             lastConf.Remove("client_secret");
             await base.ApplyStatus(api, entity, lastConf, defaultNamespace, cancellationToken);
+        }
+
+        /// <summary>
+        /// Applies labels to the Client entity for reverse lookup by Connection controller.
+        /// Uses hash-based label keys to stay within Kubernetes 63 char limit.
+        /// Labels follow the pattern:
+        /// - For name/namespace refs: auth0.operator/conn-ref-{hash} = "true"
+        /// - For ID refs: auth0.operator/conn-id-{hash} = "true"
+        /// </summary>
+        /// <param name="entity"></param>
+        /// <param name="defaultNamespace"></param>
+        /// <param name="cancellationToken"></param>
+        /// <returns></returns>
+        async Task ApplyConnectionLabels(V1Client entity, string defaultNamespace, CancellationToken cancellationToken)
+        {
+            var labelsChanged = false;
+            entity.Metadata.Labels ??= new Dictionary<string, string>();
+
+            // Clear old connection labels (both old format and new hash-based format)
+            var labelsToRemove = entity.Metadata.Labels
+                .Where(kv => kv.Key.StartsWith("auth0.operator/uses-connection-") ||
+                             kv.Key.StartsWith("auth0.operator/conn-ref-") ||
+                             kv.Key.StartsWith("auth0.operator/conn-id-"))
+                .Select(kv => kv.Key)
+                .ToList();
+
+            foreach (var key in labelsToRemove)
+            {
+                entity.Metadata.Labels.Remove(key);
+                labelsChanged = true;
+            }
+
+            // Add current connection labels using hash-based keys
+            foreach (var connRef in entity.Spec?.Conf?.EnabledConnections ?? [])
+            {
+                string labelKey;
+
+                if (!string.IsNullOrEmpty(connRef.Id))
+                {
+                    // ID-based reference: use conn-id-{hash}
+                    labelKey = GenerateConnectionIdLabelKey(connRef.Id);
+                    Logger.LogDebug("{EntityTypeName} {EntityNamespace}/{EntityName} adding ID-based connection label for ID {ConnectionId}",
+                        EntityTypeName, entity.Namespace(), entity.Name(), connRef.Id);
+                }
+                else if (!string.IsNullOrEmpty(connRef.Name))
+                {
+                    // Name/namespace reference: use conn-ref-{hash}
+                    var connNs = connRef.Namespace ?? defaultNamespace;
+                    labelKey = GenerateConnectionLabelKey(connRef.Name, connNs);
+                    Logger.LogDebug("{EntityTypeName} {EntityNamespace}/{EntityName} adding name-based connection label for {ConnectionNamespace}/{ConnectionName}",
+                        EntityTypeName, entity.Namespace(), entity.Name(), connNs, connRef.Name);
+                }
+                else
+                {
+                    Logger.LogWarning("{EntityTypeName} {EntityNamespace}/{EntityName} skipping connection reference with no name or ID",
+                        EntityTypeName, entity.Namespace(), entity.Name());
+                    continue;
+                }
+
+                if (!entity.Metadata.Labels.ContainsKey(labelKey))
+                {
+                    entity.Metadata.Labels[labelKey] = "true";
+                    labelsChanged = true;
+                }
+            }
+
+            if (labelsChanged)
+            {
+                Logger.LogDebug("{EntityTypeName} {EntityNamespace}/{EntityName} updating connection labels",
+                    EntityTypeName, entity.Namespace(), entity.Name());
+                await Kube.UpdateAsync(entity, cancellationToken);
+            }
+        }
+
+        /// <summary>
+        /// Generates a hash-based label key for connection references.
+        /// Format: auth0.operator/conn-ref-{hash} where hash is 16 chars.
+        /// This ensures the label name (after prefix) stays under 63 chars.
+        /// </summary>
+        /// <param name="crdName">Connection CRD name</param>
+        /// <param name="crdNamespace">Connection CRD namespace</param>
+        /// <returns>Label key</returns>
+        internal static string GenerateConnectionLabelKey(string crdName, string crdNamespace)
+        {
+            var input = $"{crdNamespace}/{crdName}";
+            var hash = ComputeShortHash(input);
+            return $"auth0.operator/conn-ref-{hash}";
+        }
+
+        /// <summary>
+        /// Generates a hash-based label key for ID-based connection references.
+        /// Format: auth0.operator/conn-id-{hash} where hash is 16 chars.
+        /// </summary>
+        /// <param name="connectionId">Auth0 connection ID</param>
+        /// <returns>Label key</returns>
+        internal static string GenerateConnectionIdLabelKey(string connectionId)
+        {
+            var hash = ComputeShortHash(connectionId);
+            return $"auth0.operator/conn-id-{hash}";
+        }
+
+        /// <summary>
+        /// Computes a short, stable hash for the given input.
+        /// Returns first 16 characters of SHA256 hash in lowercase hex.
+        /// </summary>
+        /// <param name="input">Input string to hash</param>
+        /// <returns>16-character hash string</returns>
+        static string ComputeShortHash(string input)
+        {
+            var hashBytes = SHA256.HashData(Encoding.UTF8.GetBytes(input));
+            return Convert.ToHexString(hashBytes).Substring(0, 16).ToLowerInvariant();
         }
 
         /// <summary>
@@ -295,382 +394,12 @@ namespace Alethic.Auth0.Operator.Controllers
             }
         }
 
-        /// <summary>
-        /// Attempts to resolve the list of connection references to connection IDs.
-        /// </summary>
-        /// <param name="api"></param>
-        /// <param name="refs"></param>
-        /// <param name="defaultNamespace"></param>
-        /// <param name="cancellationToken"></param>
-        /// <returns></returns>
-        async Task<string[]?> ResolveConnectionRefsToIds(IManagementApiClient api, V1ConnectionReference[]? refs, string defaultNamespace, CancellationToken cancellationToken)
-        {
-            if (refs is null || refs.Length == 0)
-                return Array.Empty<string>();
-
-            var l = new List<string>(refs.Length);
-
-            foreach (var i in refs)
-                l.Add(await ResolveConnectionRefToId(api, i, defaultNamespace, cancellationToken) ?? throw new InvalidOperationException());
-
-            return l.ToArray();
-        }
-
-        /// <summary>
-        /// Reconciles enabled connections by comparing current desired state with previous state,
-        /// enabling new connections and disabling removed ones.
-        /// </summary>
-        /// <param name="api"></param>
-        /// <param name="entity"></param>
-        /// <param name="clientId"></param>
-        /// <param name="defaultNamespace"></param>
-        /// <param name="cancellationToken"></param>
-        /// <returns></returns>
-        async Task ReconcileEnabledConnections(IManagementApiClient api, V1Client entity, string clientId, string defaultNamespace, CancellationToken cancellationToken)
-        {
-            var conf = entity.Spec.Conf;
-
-            // Diagnostic logging to trace enabled_connections deserialization
-            // Serialize the entire Conf to JSON for inspection
-            try
-            {
-                var confJson = conf != null ? JsonSerializer.Serialize(conf, new JsonSerializerOptions { WriteIndented = false }) : "(null)";
-                Logger.LogDebug("{EntityTypeName} {ClientId} ReconcileEnabledConnections: Conf JSON = {ConfJson}", EntityTypeName, clientId, confJson);
-            }
-            catch (Exception ex)
-            {
-                Logger.LogWarning(ex, "{EntityTypeName} {ClientId} ReconcileEnabledConnections: Failed to serialize Conf to JSON", EntityTypeName, clientId);
-            }
-
-            if (conf == null)
-            {
-                Logger.LogWarning("{EntityTypeName} {ClientId} ReconcileEnabledConnections: entity.Spec.Conf is NULL", EntityTypeName, clientId);
-            }
-            else if (conf.EnabledConnections == null)
-            {
-                Logger.LogWarning("{EntityTypeName} {ClientId} ReconcileEnabledConnections: EnabledConnections is NULL - check if enabled_connections is defined in spec.conf", EntityTypeName, clientId);
-            }
-            else if (conf.EnabledConnections.Length == 0)
-            {
-                Logger.LogInformation("{EntityTypeName} {ClientId} ReconcileEnabledConnections: EnabledConnections is empty array", EntityTypeName, clientId);
-            }
-            else
-            {
-                Logger.LogInformation("{EntityTypeName} {ClientId} ReconcileEnabledConnections: EnabledConnections has {Count} entries", EntityTypeName, clientId, conf.EnabledConnections.Length);
-                foreach (var connRef in conf.EnabledConnections)
-                {
-                    Logger.LogInformation("{EntityTypeName} {ClientId} ReconcileEnabledConnections: Connection ref - Name={Name}, Namespace={Namespace}, Id={Id}",
-                        EntityTypeName, clientId, connRef.Name ?? "(null)", connRef.Namespace ?? "(null)", connRef.Id ?? "(null)");
-                }
-            }
-
-            var currentConnectionRefs = conf?.EnabledConnections ?? Array.Empty<V1ConnectionReference>();
-
-            // Include any pending operations from previous reconciliation attempts (for rate limit recovery)
-            var pendingEnableIds = entity.Status.PendingEnableConnectionIds ?? Array.Empty<string>();
-            var pendingDisableIds = entity.Status.PendingDisableConnectionIds ?? Array.Empty<string>();
-
-            // Resolve current connection references to IDs
-            string[] desiredConnectionIds;
-            try
-            {
-                desiredConnectionIds = await ResolveConnectionRefsToIds(api, currentConnectionRefs, defaultNamespace, cancellationToken) ?? Array.Empty<string>();
-                desiredConnectionIds = desiredConnectionIds
-                    .Where(id => string.IsNullOrWhiteSpace(id) == false)
-                    .Distinct()
-                    .OrderBy(id => id, StringComparer.Ordinal)
-                    .ToArray();
-            }
-            catch (RetryException)
-            {
-                // Connection not ready yet, will retry later
-                Logger.LogWarning("{EntityTypeName} {ClientId} one or more referenced connections are not ready, will retry", EntityTypeName, clientId);
-                throw;
-            }
-
-            // Get ALL connections where this client is currently enabled by querying Auth0 directly
-            // Using GetAllAsync ensures we detect drift (manual enables) and is more efficient than N calls
-            var actuallyEnabledConnectionIds = await GetActuallyEnabledConnections(api, clientId, cancellationToken);
-
-            // Intersect pending operations with current desired state to handle spec changes during retry
-            // If a connection was removed from spec, don't retry enabling it
-            // If a connection was added to spec, don't retry disabling it
-            var validPendingEnableIds = pendingEnableIds.Intersect(desiredConnectionIds).ToArray();
-            var validPendingDisableIds = pendingDisableIds.Except(desiredConnectionIds).ToArray();
-
-            // Connections to enable: desired but not actually enabled, plus any valid pending retries
-            var connectionsToEnable = desiredConnectionIds
-                .Except(actuallyEnabledConnectionIds)
-                .Union(validPendingEnableIds.Except(actuallyEnabledConnectionIds))
-                .Distinct()
-                .ToList();
-
-            // Connections to disable: actually enabled but not desired, plus any valid pending retries
-            var connectionsToDisable = actuallyEnabledConnectionIds
-                .Except(desiredConnectionIds)
-                .Union(validPendingDisableIds.Intersect(actuallyEnabledConnectionIds))
-                .Distinct()
-                .ToList();
-
-            // Diagnostic: Log the computed enable/disable lists
-            Logger.LogInformation("{EntityTypeName} {ClientId} ReconcileEnabledConnections: desired={DesiredCount}, actuallyEnabled={ActualCount}, toEnable={EnableCount}, toDisable={DisableCount}",
-                EntityTypeName, clientId, desiredConnectionIds.Length, actuallyEnabledConnectionIds.Length, connectionsToEnable.Count, connectionsToDisable.Count);
-
-            if (connectionsToEnable.Count == 0 && connectionsToDisable.Count == 0)
-            {
-                Logger.LogDebug("{EntityTypeName} {ClientId} ReconcileEnabledConnections: no connection changes needed", EntityTypeName, clientId);
-            }
-
-            // Track results
-            var enabledSuccessfully = new List<string>();
-            var disabledSuccessfully = new List<string>();
-            var stillPendingEnable = new List<string>();
-            var stillPendingDisable = new List<string>();
-            RateLimitApiException? rateLimitException = null;
-            var otherFailures = new List<Exception>();
-
-            // Enable new connections
-            foreach (var connectionId in connectionsToEnable)
-            {
-                try
-                {
-                    await EnableClientOnConnection(api, clientId, connectionId, cancellationToken);
-                    enabledSuccessfully.Add(connectionId);
-                }
-                catch (RateLimitApiException ex)
-                {
-                    rateLimitException ??= ex; // Keep the first one for timing info
-                    stillPendingEnable.Add(connectionId);
-                    Logger.LogWarning("{EntityTypeName} {ClientId} hit rate limit enabling connection {ConnectionId}, will retry", EntityTypeName, clientId, connectionId);
-                    // Stop processing more enables on rate limit
-                    break;
-                }
-                catch (Exception ex)
-                {
-                    // Track the failure AND mark the connection as pending for retry
-                    otherFailures.Add(ex);
-                    stillPendingEnable.Add(connectionId);
-                    Logger.LogWarning(ex, "{EntityTypeName} {ClientId} failed to enable connection {ConnectionId}, will retry", EntityTypeName, clientId, connectionId);
-                }
-            }
-
-            // Add remaining connections to pending if we hit a rate limit
-            if (rateLimitException != null)
-            {
-                var processedCount = enabledSuccessfully.Count + stillPendingEnable.Count + otherFailures.Count;
-                var remaining = connectionsToEnable.Skip(processedCount).ToList();
-                stillPendingEnable.AddRange(remaining);
-            }
-
-            // Disable removed connections (only if we haven't hit a rate limit)
-            if (rateLimitException == null)
-            {
-                foreach (var connectionId in connectionsToDisable)
-                {
-                    try
-                    {
-                        await DisableClientOnConnection(api, clientId, connectionId, cancellationToken);
-                        disabledSuccessfully.Add(connectionId);
-                    }
-                    catch (RateLimitApiException ex)
-                    {
-                        rateLimitException ??= ex;
-                        stillPendingDisable.Add(connectionId);
-                        Logger.LogWarning("{EntityTypeName} {ClientId} hit rate limit disabling connection {ConnectionId}, will retry", EntityTypeName, clientId, connectionId);
-                        break;
-                    }
-                    catch (Exception ex)
-                    {
-                        // Track the failure AND mark the connection as pending for retry
-                        otherFailures.Add(ex);
-                        stillPendingDisable.Add(connectionId);
-                        Logger.LogWarning(ex, "{EntityTypeName} {ClientId} failed to disable connection {ConnectionId}, will retry", EntityTypeName, clientId, connectionId);
-                    }
-                }
-
-                // Add remaining connections to pending if we hit a rate limit
-                if (rateLimitException != null)
-                {
-                    var processedCount = disabledSuccessfully.Count + stillPendingDisable.Count;
-                    var remaining = connectionsToDisable.Skip(processedCount).ToList();
-                    stillPendingDisable.AddRange(remaining);
-                }
-            }
-            else
-            {
-                // All disable operations are pending since we already hit rate limit
-                stillPendingDisable.AddRange(connectionsToDisable);
-            }
-
-            // Update status - only track pending operations for rate limit recovery
-            // Auth0 is queried directly for actual state, so we only need to track pending retries
-            entity.Status.PendingEnableConnectionIds = stillPendingEnable.Count > 0 ? stillPendingEnable.ToArray() : null;
-            entity.Status.PendingDisableConnectionIds = stillPendingDisable.Count > 0 ? stillPendingDisable.ToArray() : null;
-
-            // If we have pending operations (rate limit or failures), persist status BEFORE throwing
-            // This ensures the pending state is saved to Kubernetes and will be retried on next reconciliation
-            var hasPendingOperations = stillPendingEnable.Count > 0 || stillPendingDisable.Count > 0 || otherFailures.Count > 0;
-            if (hasPendingOperations)
-            {
-                Logger.LogInformation(
-                    "{EntityTypeName} {ClientId} has pending connection operations (enable: {PendingEnable}, disable: {PendingDisable}, failures: {Failures}), persisting status before retry",
-                    EntityTypeName,
-                    clientId,
-                    stillPendingEnable.Count,
-                    stillPendingDisable.Count,
-                    otherFailures.Count
-                );
-                
-                // Persist the status to Kubernetes so pending operations survive the exception
-                await Kube.UpdateStatusAsync(entity, cancellationToken);
-            }
-
-            // If we hit a rate limit, throw it to trigger proper handling with backoff
-            // But first log any other failures so they're not silently dropped
-            if (rateLimitException != null)
-            {
-                if (otherFailures.Count > 0)
-                {
-                    Logger.LogWarning(
-                        "{EntityTypeName} {ClientId} had {FailureCount} non-rate-limit failures that will be retried after rate limit backoff",
-                        EntityTypeName,
-                        clientId,
-                        otherFailures.Count
-                    );
-                    foreach (var failure in otherFailures)
-                    {
-                        Logger.LogWarning(
-                            failure,
-                            "{EntityTypeName} {ClientId} deferred failure: {Message}",
-                            EntityTypeName,
-                            clientId,
-                            failure.Message
-                        );
-                    }
-                }
-                throw rateLimitException;
-            }
-
-            // If there were other failures, throw RetryException to trigger proper requeue
-            // (AggregateException would fall through to generic exception handler which doesn't requeue)
-            if (otherFailures.Count > 0)
-            {
-                var errorMessages = string.Join("; ", otherFailures.Select(e => e.Message));
-                throw new RetryException($"One or more enabled connections could not be reconciled: {errorMessages}");
-            }
-        }
-
-        /// <summary>
-        /// Enables this client on a specific connection.
-        /// </summary>
-        /// <param name="api"></param>
-        /// <param name="clientId"></param>
-        /// <param name="connectionId"></param>
-        /// <param name="cancellationToken"></param>
-        /// <returns></returns>
-        async Task EnableClientOnConnection(IManagementApiClient api, string clientId, string connectionId, CancellationToken cancellationToken)
-        {
-            try
-            {
-                Logger.LogInformation("{EntityTypeName} {ClientId} enabling connection {ConnectionId}", EntityTypeName, clientId, connectionId);
-
-                var request = new EnabledClientsUpdateRequest
-                {
-                    EnabledClients = new[]
-                    {
-                        new EnabledClientsToUpdate
-                        {
-                            ClientId = clientId,
-                            Status = true
-                        }
-                    }
-                };
-
-                await api.Connections.UpdateEnabledClientsAsync(connectionId, request, cancellationToken);
-                Logger.LogInformation("{EntityTypeName} {ClientId} successfully enabled connection {ConnectionId}", EntityTypeName, clientId, connectionId);
-            }
-            catch (Exception ex)
-            {
-                Logger.LogError(ex, "{EntityTypeName} {ClientId} failed to enable connection {ConnectionId}", EntityTypeName, clientId, connectionId);
-                throw;
-            }
-        }
-
-        /// <summary>
-        /// Disables this client on a specific connection.
-        /// </summary>
-        /// <param name="api"></param>
-        /// <param name="clientId"></param>
-        /// <param name="connectionId"></param>
-        /// <param name="cancellationToken"></param>
-        /// <returns></returns>
-        async Task DisableClientOnConnection(IManagementApiClient api, string clientId, string connectionId, CancellationToken cancellationToken)
-        {
-            try
-            {
-                Logger.LogInformation("{EntityTypeName} {ClientId} disabling connection {ConnectionId} (reason: removed from enabled_connections)", EntityTypeName, clientId, connectionId);
-
-                var request = new EnabledClientsUpdateRequest
-                {
-                    EnabledClients = new[]
-                    {
-                        new EnabledClientsToUpdate
-                        {
-                            ClientId = clientId,
-                            Status = false
-                        }
-                    }
-                };
-
-                await api.Connections.UpdateEnabledClientsAsync(connectionId, request, cancellationToken);
-                Logger.LogInformation("{EntityTypeName} {ClientId} successfully disabled connection {ConnectionId}", EntityTypeName, clientId, connectionId);
-            }
-            catch (Exception ex)
-            {
-                Logger.LogError(ex, "{EntityTypeName} {ClientId} failed to disable connection {ConnectionId}", EntityTypeName, clientId, connectionId);
-                throw;
-            }
-        }
-
-        /// <summary>
-        /// Gets ALL Auth0 connection IDs where this client is currently enabled by querying Auth0 directly.
-        /// Uses a single GetAllAsync call to avoid N+1 API calls and detect drift from manual changes.
-        /// </summary>
-        /// <param name="api">Auth0 Management API client</param>
-        /// <param name="clientId">The Auth0 client ID to check for</param>
-        /// <param name="cancellationToken"></param>
-        /// <returns>All connection IDs where this client is currently enabled in Auth0</returns>
-        async Task<string[]> GetActuallyEnabledConnections(IManagementApiClient api, string clientId, CancellationToken cancellationToken)
-        {
-            // Get all connections in one API call - this is more efficient than N individual calls
-            // and ensures we detect drift (connections enabled outside of the operator)
-            var allConnections = await api.Connections.GetAllAsync(new GetConnectionsRequest(), (PaginationInfo?)null, cancellationToken);
-
-            var enabledOn = new List<string>();
-            foreach (var connection in allConnections)
-            {
-                if (connection?.EnabledClients != null && connection.EnabledClients.Contains(clientId))
-                {
-                    enabledOn.Add(connection.Id);
-                    Logger.LogDebug("{EntityTypeName} {ClientId} GetActuallyEnabledConnections: Found enabled on {ConnectionId} ({ConnectionName})",
-                        EntityTypeName, clientId, connection.Id, connection.Name);
-                }
-            }
-
-            Logger.LogDebug("{EntityTypeName} {ClientId} GetActuallyEnabledConnections: Client is enabled on {Count} connections out of {Total} total",
-                EntityTypeName, clientId, enabledOn.Count, allConnections.Count);
-
-            return enabledOn.ToArray();
-        }
-
         /// <inheritdoc />
         protected override async Task Delete(IManagementApiClient api, string id, CancellationToken cancellationToken)
         {
-            // Note: We don't explicitly disable connections here because:
-            // 1. The Delete method doesn't have access to the entity spec
-            // 2. Connections are managed declaratively during reconciliation via ReconcileEnabledConnections
-            // 3. If users want to clean up before deletion, they should remove enabled_connections from spec first,
-            //    which will trigger reconciliation to disable the connections, then delete the client
+            // Note: enabled_clients is managed by the Connection controller via aggregation from all Client CRDs.
+            // When this client is deleted, the ClientConnectionWatcherService will detect the deletion
+            // and trigger reconciliation of affected Connection CRDs.
 
             Logger.LogInformation("{EntityTypeName} deleting client from Auth0 with ID: {ClientId} (reason: Kubernetes entity deleted)", EntityTypeName, id);
             await api.Clients.DeleteAsync(id, cancellationToken);

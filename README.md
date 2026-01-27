@@ -123,9 +123,15 @@ spec:
 
 #### Enable connections from the client
 
-Clients can declaratively enable or disable Auth0 connections via `spec.conf.enabled_connections`. The operator will reconcile the list by enabling new connections and disabling any that are removed.
+Clients can declaratively enable Auth0 connections via `spec.conf.enabled_connections`. The operator uses a **single-writer architecture** where the Connection controller is the sole owner of `enabled_clients` in Auth0:
 
-```
+1. **Client CRD** declares which connections it wants to use via `spec.conf.enabled_connections`
+2. **Client controller** adds labels to the Client resource for efficient reverse lookups
+3. **Connection controller** aggregates all Client CRDs referencing it and sets `enabled_clients` in Auth0
+
+This architecture prevents race conditions that can occur when both Client and Connection controllers try to manage the same Auth0 state.
+
+```yaml
 apiVersion: kubernetes.auth0.com/v1
 kind: Client
 metadata:
@@ -139,9 +145,11 @@ spec:
     app_type: spa
     enabled_connections:
       - name: google-workspace
-        namespace: shared-connections
+        namespace: shared-connections  # Optional: defaults to same namespace
       - name: username-password
 ```
+
+> **Note:** Do not set `enabled_clients` directly on Connection resources. This field is computed automatically from all Client CRDs that reference the connection. Any value set directly will be overwritten.
 
 ## Client Secret
 

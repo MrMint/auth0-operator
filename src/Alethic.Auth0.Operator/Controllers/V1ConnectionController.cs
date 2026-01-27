@@ -3,11 +3,14 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
 using Alethic.Auth0.Operator.Core.Models;
+using Alethic.Auth0.Operator.Core.Models.Client;
 using Alethic.Auth0.Operator.Core.Models.Connection;
 using Alethic.Auth0.Operator.Models;
 using Alethic.Auth0.Operator.Options;
@@ -34,12 +37,18 @@ namespace Alethic.Auth0.Operator.Controllers
 
     [EntityRbac(typeof(V1Tenant), Verbs = RbacVerb.List | RbacVerb.Get)]
     [EntityRbac(typeof(V1Connection), Verbs = RbacVerb.All)]
+    [EntityRbac(typeof(V1Client), Verbs = RbacVerb.List | RbacVerb.Get)]
     [EntityRbac(typeof(V1Secret), Verbs = RbacVerb.List | RbacVerb.Get)]
     [EntityRbac(typeof(Eventsv1Event), Verbs = RbacVerb.All)]
     public class V1ConnectionController :
         V1TenantEntityController<V1Connection, V1Connection.SpecDef, V1Connection.StatusDef, ConnectionConf>,
         IEntityController<V1Connection>
     {
+        /// <summary>
+        /// Holds the current entity being reconciled.
+        /// Used to access CRD metadata name/namespace in Create/Update methods.
+        /// </summary>
+        readonly AsyncLocal<V1Connection?> _currentEntity = new();
 
         /// <summary>
         /// Initializes a new instance.
@@ -69,6 +78,21 @@ namespace Alethic.Auth0.Operator.Controllers
 
         /// <inheritdoc />
         protected override string EntityTypeName => "Connection";
+
+        /// <inheritdoc />
+        protected override async Task<bool> Reconcile(V1Connection entity, CancellationToken cancellationToken)
+        {
+            // Capture entity for use in Create/Update methods
+            _currentEntity.Value = entity;
+            try
+            {
+                return await base.Reconcile(entity, cancellationToken);
+            }
+            finally
+            {
+                _currentEntity.Value = null;
+            }
+        }
 
         /// <inheritdoc />
         protected override async Task<Hashtable?> Get(IManagementApiClient api, string id, string defaultNamespace, CancellationToken cancellationToken)
@@ -142,33 +166,12 @@ namespace Alethic.Auth0.Operator.Controllers
             return null;
         }
 
-        /// <summary>
-        /// Attempts to resolve the list of client references to client IDs.
-        /// </summary>
-        /// <param name="refs"></param>
-        /// <param name="defaultNamespace"></param>
-        /// <param name="cancellationToken"></param>
-        /// <returns></returns>
-        /// <exception cref="InvalidOperationException"></exception>
-        async Task<string[]?> ResolveClientRefsToIds(IManagementApiClient api, V1ClientReference[]? refs, string defaultNamespace, CancellationToken cancellationToken)
-        {
-            if (refs is null)
-                return Array.Empty<string>();
-
-            var l = new List<string>(refs.Length);
-
-            foreach (var i in refs)
-                l.Add(await ResolveClientRefToId(api, i, defaultNamespace, cancellationToken) ?? throw new InvalidOperationException());
-
-            return l.ToArray();
-        }
-
         /// <inheritdoc />
         protected override async Task<string> Create(IManagementApiClient api, ConnectionConf conf, string defaultNamespace, CancellationToken cancellationToken)
         {
             Logger.LogInformation("{EntityTypeName} creating connection in Auth0 with name: {ConnectionName} and strategy: {Strategy}", EntityTypeName, conf.Name, conf.Strategy);
             var req = new ConnectionCreateRequest();
-            await ApplyConfToRequest(api, req, conf, defaultNamespace, cancellationToken);
+            ApplyConfToRequest(req, conf);
 
             if (conf.Strategy is null)
                 throw new InvalidOperationException("Missing connection strategy.");
@@ -181,6 +184,16 @@ namespace Alethic.Auth0.Operator.Controllers
             // configure strategy and options
             req.Strategy = conf.Strategy;
             req.Options = options;
+
+            // For new connections, aggregate enabled_clients from Client CRDs
+            // Use CRD metadata name/namespace, not conf.Name (which is the Auth0 name)
+            var entityName = _currentEntity.Value?.Name() ?? "";
+            var entityNamespace = _currentEntity.Value?.Namespace() ?? defaultNamespace;
+            var aggregatedClientIds = await AggregateEnabledClientsFromClientCRDs(
+                entityName,
+                entityNamespace,
+                cancellationToken);
+            req.EnabledClients = aggregatedClientIds;
 
             var self = await api.Connections.CreateAsync(req, cancellationToken);
             if (self is null)
@@ -195,19 +208,24 @@ namespace Alethic.Auth0.Operator.Controllers
         {
             Logger.LogInformation("{EntityTypeName} updating connection in Auth0 with ID: {ConnectionId}, name: {ConnectionName} and strategy: {Strategy}", EntityTypeName, id, conf.Name, conf.Strategy);
             var req = new ConnectionUpdateRequest();
-            await ApplyConfToRequest(api, req, conf, defaultNamespace, cancellationToken);
+            ApplyConfToRequest(req, conf);
 
             // name has to be cleared for an update
             req.Name = null!;
 
-            // Preserve enabled_clients from Auth0 if not explicitly specified in spec.conf
-            // This prevents the Connection controller from removing clients that were enabled
-            // by the Client controller (enabled_clients is managed by Client, not Connection)
-            if (conf.EnabledClients is null && last?["enabled_clients"] is IEnumerable<object> existingClients)
-            {
-                req.EnabledClients = existingClients.OfType<string>().ToArray();
-                Logger.LogDebug("{EntityTypeName} preserving {Count} existing enabled_clients for connection {ConnectionId}", EntityTypeName, req.EnabledClients.Length, id);
-            }
+            // Aggregate enabled_clients from all Client CRDs that reference this connection
+            // This is the single source of truth for enabled_clients (Connection is the single writer)
+            // Use CRD metadata name/namespace, not conf.Name (which is the Auth0 name)
+            var entityName = _currentEntity.Value?.Name() ?? "";
+            var entityNamespace = _currentEntity.Value?.Namespace() ?? defaultNamespace;
+            var aggregatedClientIds = await AggregateEnabledClientsFromClientCRDs(
+                entityName,
+                entityNamespace,
+                cancellationToken);
+
+            req.EnabledClients = aggregatedClientIds;
+            Logger.LogDebug("{EntityTypeName} aggregated {Count} enabled_clients for connection {ConnectionId}",
+                EntityTypeName, aggregatedClientIds.Length, id);
 
             // calculate options: depends on current strategy, possibly null, which means no apply
             var strategy = last?["strategy"] as string ?? conf.Strategy;
@@ -220,15 +238,143 @@ namespace Alethic.Auth0.Operator.Controllers
         }
 
         /// <summary>
-        /// Applies the specified configuration to the request object.
+        /// Aggregates enabled client IDs from all Client CRDs that reference this connection.
+        /// Uses label-based indexing for efficient lookups, plus fallback for ID-based references.
         /// </summary>
-        /// <param name="api"></param>
+        /// <param name="crdName">The Connection CRD's metadata.name</param>
+        /// <param name="crdNamespace">The Connection CRD's metadata.namespace</param>
+        /// <param name="cancellationToken"></param>
+        /// <returns>Array of Auth0 client IDs that should be enabled on this connection</returns>
+        async Task<string[]> AggregateEnabledClientsFromClientCRDs(
+            string crdName,
+            string crdNamespace,
+            CancellationToken cancellationToken)
+        {
+            // Use label selector for efficient lookup by CRD name/namespace
+            var clients = await GetClientsReferencingConnection(crdName, crdNamespace, cancellationToken);
+
+            // Also find clients referencing this connection by Auth0 ID (if status.id is available)
+            var connectionId = _currentEntity.Value?.Status?.Id;
+            if (!string.IsNullOrEmpty(connectionId))
+            {
+                var clientsByIdRef = await GetClientsReferencingConnectionById(connectionId, cancellationToken);
+                clients = clients.Concat(clientsByIdRef).ToList();
+            }
+
+            var enabledClientIds = new List<string>();
+            foreach (var client in clients)
+            {
+                if (string.IsNullOrEmpty(client.Status?.Id))
+                {
+                    Logger.LogDebug("{EntityTypeName} skipping Client {ClientNamespace}/{ClientName} - not yet created in Auth0",
+                        EntityTypeName, client.Namespace(), client.Name());
+                    continue;
+                }
+
+                enabledClientIds.Add(client.Status.Id);
+                Logger.LogDebug("{EntityTypeName} including Client {ClientNamespace}/{ClientName} (Auth0 ID: {ClientId}) in enabled_clients",
+                    EntityTypeName, client.Namespace(), client.Name(), client.Status.Id);
+            }
+
+            // Use OrderBy for deterministic ordering, then Distinct
+            return enabledClientIds.Distinct().OrderBy(id => id).ToArray();
+        }
+
+        /// <summary>
+        /// Gets all Client CRDs that reference this connection using label selectors.
+        /// Uses hash-based label keys to avoid Kubernetes 63 char limit.
+        /// </summary>
+        /// <param name="crdName">The Connection CRD's metadata.name</param>
+        /// <param name="crdNamespace">The Connection CRD's metadata.namespace</param>
+        /// <param name="cancellationToken"></param>
+        /// <returns>List of V1Client resources referencing this connection</returns>
+        async Task<IList<V1Client>> GetClientsReferencingConnection(
+            string crdName,
+            string crdNamespace,
+            CancellationToken cancellationToken)
+        {
+            var labelKey = GenerateConnectionLabelKey(crdName, crdNamespace);
+            var labelSelector = $"{labelKey}=true";
+
+            Logger.LogDebug("{EntityTypeName} searching for Clients with label selector: {LabelSelector}",
+                EntityTypeName, labelSelector);
+
+            // Efficient API server query using label selector across all namespaces
+            return await Kube.ListAsync<V1Client>(
+                @namespace: null,
+                labelSelector: labelSelector,
+                cancellationToken: cancellationToken);
+        }
+
+        /// <summary>
+        /// Gets all Client CRDs that reference this connection by Auth0 ID.
+        /// Uses hash-based label keys.
+        /// </summary>
+        /// <param name="connectionId">The Auth0 connection ID</param>
+        /// <param name="cancellationToken"></param>
+        /// <returns>List of V1Client resources referencing this connection by ID</returns>
+        async Task<IList<V1Client>> GetClientsReferencingConnectionById(
+            string connectionId,
+            CancellationToken cancellationToken)
+        {
+            var labelKey = GenerateConnectionIdLabelKey(connectionId);
+            var labelSelector = $"{labelKey}=true";
+
+            Logger.LogDebug("{EntityTypeName} searching for Clients with ID-based label selector: {LabelSelector}",
+                EntityTypeName, labelSelector);
+
+            return await Kube.ListAsync<V1Client>(
+                @namespace: null,
+                labelSelector: labelSelector,
+                cancellationToken: cancellationToken);
+        }
+
+        /// <summary>
+        /// Generates a hash-based label key for connection references.
+        /// Format: auth0.operator/conn-ref-{hash} where hash is 16 chars.
+        /// This ensures the label name (after prefix) stays under 63 chars.
+        /// </summary>
+        /// <param name="crdName">Connection CRD name</param>
+        /// <param name="crdNamespace">Connection CRD namespace</param>
+        /// <returns>Label key</returns>
+        internal static string GenerateConnectionLabelKey(string crdName, string crdNamespace)
+        {
+            var input = $"{crdNamespace}/{crdName}";
+            var hash = ComputeShortHash(input);
+            return $"auth0.operator/conn-ref-{hash}";
+        }
+
+        /// <summary>
+        /// Generates a hash-based label key for ID-based connection references.
+        /// Format: auth0.operator/conn-id-{hash} where hash is 16 chars.
+        /// </summary>
+        /// <param name="connectionId">Auth0 connection ID</param>
+        /// <returns>Label key</returns>
+        internal static string GenerateConnectionIdLabelKey(string connectionId)
+        {
+            var hash = ComputeShortHash(connectionId);
+            return $"auth0.operator/conn-id-{hash}";
+        }
+
+        /// <summary>
+        /// Computes a short, stable hash for the given input.
+        /// Returns first 16 characters of SHA256 hash in lowercase hex.
+        /// </summary>
+        /// <param name="input">Input string to hash</param>
+        /// <returns>16-character hash string</returns>
+        static string ComputeShortHash(string input)
+        {
+            var hashBytes = SHA256.HashData(Encoding.UTF8.GetBytes(input));
+            return Convert.ToHexString(hashBytes).Substring(0, 16).ToLowerInvariant();
+        }
+
+        /// <summary>
+        /// Applies the specified configuration to the request object.
+        /// Note: enabled_clients is not applied here - it's computed via aggregation from Client CRDs.
+        /// </summary>
         /// <param name="req"></param>
         /// <param name="conf"></param>
-        /// <param name="defaultNamespace"></param>
-        /// <param name="cancellationToken"></param>
-        /// <returns></returns>
-        async Task ApplyConfToRequest(IManagementApiClient api, ConnectionBase req, ConnectionConf conf, string defaultNamespace, CancellationToken cancellationToken)
+        void ApplyConfToRequest(ConnectionBase req, ConnectionConf conf)
         {
             if (conf.Name is null)
                 throw new InvalidOperationException("Missing name.");
@@ -240,7 +386,8 @@ namespace Alethic.Auth0.Operator.Controllers
             req.Realms = conf.Realms ?? [];
             req.IsDomainConnection = conf.IsDomainConnection ?? false;
             req.ShowAsButton = conf.ShowAsButton;
-            req.EnabledClients = await ResolveClientRefsToIds(api, conf.EnabledClients, defaultNamespace, cancellationToken);
+            // Note: EnabledClients is intentionally NOT set here.
+            // It's computed via aggregation in Update() from all Client CRDs.
         }
 
         /// <inheritdoc />

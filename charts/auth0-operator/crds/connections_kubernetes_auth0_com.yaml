@@ -85,21 +85,9 @@ spec:
                       type: string
                     nullable: true
                     type: array
-                  enabled_clients:
-                    items:
-                      properties:
-                        namespace:
-                          nullable: true
-                          type: string
-                        name:
-                          nullable: true
-                          type: string
-                        id:
-                          nullable: true
-                          type: string
-                      type: object
-                    nullable: true
-                    type: array
+                  # Note: enabled_clients is computed automatically from Client CRDs
+                  # that reference this connection via spec.conf.enabled_connections.
+                  # Do not set this field directly on Connection resources.
                   show_as_button:
                     nullable: true
                     type: boolean
@@ -135,21 +123,9 @@ spec:
                       type: string
                     nullable: true
                     type: array
-                  enabled_clients:
-                    items:
-                      properties:
-                        namespace:
-                          nullable: true
-                          type: string
-                        name:
-                          nullable: true
-                          type: string
-                        id:
-                          nullable: true
-                          type: string
-                      type: object
-                    nullable: true
-                    type: array
+                  # Note: enabled_clients is computed automatically from Client CRDs
+                  # that reference this connection via spec.conf.enabled_connections.
+                  # Do not set this field directly on Connection resources.
                   show_as_button:
                     nullable: true
                     type: boolean

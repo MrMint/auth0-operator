@@ -56,9 +56,6 @@ namespace Alethic.Auth0.Operator.Models
             [JsonConverter(typeof(SimplePrimitiveHashtableConverter))]
             public Hashtable? LastConf { get; set; }
 
-            [JsonPropertyName("lastEnabledConnectionIds")]
-            public string[]? LastEnabledConnectionIds { get; set; }
-
             /// <summary>
             /// Connection IDs that need to be enabled but failed due to rate limits.
             /// These will be retried on the next reconciliation.

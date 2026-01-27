@@ -26,7 +26,14 @@ spec:
                 nullable: true
                 type: object
                 x-kubernetes-preserve-unknown-fields: true
-              lastEnabledConnectionIds:
+              pendingEnableConnectionIds:
+                description: Connection IDs that need to be enabled but failed due to rate limits or errors. Retried on next reconciliation.
+                items:
+                  type: string
+                nullable: true
+                type: array
+              pendingDisableConnectionIds:
+                description: Connection IDs that need to be disabled but failed due to rate limits or errors. Retried on next reconciliation.
                 items:
                   type: string
                 nullable: true

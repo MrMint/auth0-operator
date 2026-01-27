@@ -364,18 +364,17 @@ namespace Alethic.Auth0.Operator.Controllers
             }
 
             var currentConnectionRefs = conf?.EnabledConnections ?? Array.Empty<V1ConnectionReference>();
-            var previousConnectionIds = entity.Status.LastEnabledConnectionIds ?? Array.Empty<string>();
 
-            // Include any pending operations from previous reconciliation attempts
+            // Include any pending operations from previous reconciliation attempts (for rate limit recovery)
             var pendingEnableIds = entity.Status.PendingEnableConnectionIds ?? Array.Empty<string>();
             var pendingDisableIds = entity.Status.PendingDisableConnectionIds ?? Array.Empty<string>();
 
             // Resolve current connection references to IDs
-            string[] currentConnectionIds;
+            string[] desiredConnectionIds;
             try
             {
-                currentConnectionIds = await ResolveConnectionRefsToIds(api, currentConnectionRefs, defaultNamespace, cancellationToken) ?? Array.Empty<string>();
-                currentConnectionIds = currentConnectionIds
+                desiredConnectionIds = await ResolveConnectionRefsToIds(api, currentConnectionRefs, defaultNamespace, cancellationToken) ?? Array.Empty<string>();
+                desiredConnectionIds = desiredConnectionIds
                     .Where(id => string.IsNullOrWhiteSpace(id) == false)
                     .Distinct()
                     .OrderBy(id => id, StringComparer.Ordinal)
@@ -388,29 +387,40 @@ namespace Alethic.Auth0.Operator.Controllers
                 throw;
             }
 
-            // Find connections to enable (in current but not in previous, plus pending from previous attempts)
-            var normalizedPreviousConnectionIds = previousConnectionIds
-                .Where(id => string.IsNullOrWhiteSpace(id) == false)
+            // Intersect pending operations with current desired state to handle spec changes during retry
+            // If a connection was removed from spec, don't retry enabling it
+            // If a connection was added to spec, don't retry disabling it
+            var validPendingEnableIds = pendingEnableIds.Intersect(desiredConnectionIds).ToArray();
+            var validPendingDisableIds = pendingDisableIds.Except(desiredConnectionIds).ToArray();
+
+            // Determine which connections we need to query Auth0 for
+            // We need to check: desired connections (to see if they need enabling) + valid pending disables (to verify they're still enabled)
+            var connectionIdsToCheck = desiredConnectionIds
+                .Union(validPendingDisableIds)
                 .Distinct()
-                .OrderBy(id => id, StringComparer.Ordinal)
                 .ToArray();
 
-            var connectionsToEnable = currentConnectionIds
-                .Except(normalizedPreviousConnectionIds)
-                .Union(pendingEnableIds)
+            // Get the ACTUAL currently enabled connections by querying Auth0 directly
+            // This avoids staleness from Connection CRD status which isn't updated when Client controller enables/disables
+            var actuallyEnabledConnectionIds = await GetActuallyEnabledConnections(api, clientId, connectionIdsToCheck, cancellationToken);
+
+            // Connections to enable: desired but not actually enabled, plus any valid pending retries
+            var connectionsToEnable = desiredConnectionIds
+                .Except(actuallyEnabledConnectionIds)
+                .Union(validPendingEnableIds.Except(actuallyEnabledConnectionIds))
                 .Distinct()
                 .ToList();
 
-            // Find connections to disable (in previous but not in current, plus pending from previous attempts)
-            var connectionsToDisable = normalizedPreviousConnectionIds
-                .Except(currentConnectionIds)
-                .Union(pendingDisableIds)
+            // Connections to disable: actually enabled but not desired, plus any valid pending retries
+            var connectionsToDisable = actuallyEnabledConnectionIds
+                .Except(desiredConnectionIds)
+                .Union(validPendingDisableIds.Intersect(actuallyEnabledConnectionIds))
                 .Distinct()
                 .ToList();
 
             // Diagnostic: Log the computed enable/disable lists
-            Logger.LogInformation("{EntityTypeName} {ClientId} ReconcileEnabledConnections: currentConnectionIds={CurrentCount}, previousConnectionIds={PreviousCount}, toEnable={EnableCount}, toDisable={DisableCount}",
-                EntityTypeName, clientId, currentConnectionIds.Length, normalizedPreviousConnectionIds.Length, connectionsToEnable.Count, connectionsToDisable.Count);
+            Logger.LogInformation("{EntityTypeName} {ClientId} ReconcileEnabledConnections: desired={DesiredCount}, actuallyEnabled={ActualCount}, toEnable={EnableCount}, toDisable={DisableCount}",
+                EntityTypeName, clientId, desiredConnectionIds.Length, actuallyEnabledConnectionIds.Length, connectionsToEnable.Count, connectionsToDisable.Count);
 
             if (connectionsToEnable.Count == 0 && connectionsToDisable.Count == 0)
             {
@@ -498,16 +508,8 @@ namespace Alethic.Auth0.Operator.Controllers
                 stillPendingDisable.AddRange(connectionsToDisable);
             }
 
-            // Update status with partial progress
-            // This ensures we don't lose track of what was successfully enabled/disabled
-            var newEnabledList = normalizedPreviousConnectionIds
-                .Except(disabledSuccessfully)
-                .Union(enabledSuccessfully)
-                .Distinct()
-                .OrderBy(id => id, StringComparer.Ordinal)
-                .ToArray();
-
-            entity.Status.LastEnabledConnectionIds = newEnabledList;
+            // Update status - only track pending operations for rate limit recovery
+            // Auth0 is queried directly for actual state, so we only need to track pending retries
             entity.Status.PendingEnableConnectionIds = stillPendingEnable.Count > 0 ? stillPendingEnable.ToArray() : null;
             entity.Status.PendingDisableConnectionIds = stillPendingDisable.Count > 0 ? stillPendingDisable.ToArray() : null;
 
@@ -634,6 +636,43 @@ namespace Alethic.Auth0.Operator.Controllers
                 Logger.LogError(ex, "{EntityTypeName} {ClientId} failed to disable connection {ConnectionId}", EntityTypeName, clientId, connectionId);
                 throw;
             }
+        }
+
+        /// <summary>
+        /// Gets the Auth0 connection IDs where this client is actually enabled by querying Auth0 directly.
+        /// This queries the Management API to get fresh data, avoiding staleness from Connection CRD status.
+        /// </summary>
+        /// <param name="api">Auth0 Management API client</param>
+        /// <param name="clientId">The Auth0 client ID to check for</param>
+        /// <param name="connectionIds">The connection IDs to check</param>
+        /// <param name="cancellationToken"></param>
+        /// <returns>Connection IDs where this client is currently enabled in Auth0</returns>
+        async Task<string[]> GetActuallyEnabledConnections(IManagementApiClient api, string clientId, IEnumerable<string> connectionIds, CancellationToken cancellationToken)
+        {
+            var enabledOn = new List<string>();
+
+            foreach (var connectionId in connectionIds)
+            {
+                try
+                {
+                    var connection = await api.Connections.GetAsync(connectionId, cancellationToken: cancellationToken);
+                    if (connection?.EnabledClients != null && connection.EnabledClients.Contains(clientId))
+                    {
+                        enabledOn.Add(connectionId);
+                        Logger.LogDebug("{EntityTypeName} {ClientId} GetActuallyEnabledConnections: Found enabled on {ConnectionId} ({ConnectionName})",
+                            EntityTypeName, clientId, connectionId, connection.Name);
+                    }
+                }
+                catch (ErrorApiException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
+                {
+                    // Connection doesn't exist in Auth0 - skip it
+                    Logger.LogWarning("{EntityTypeName} {ClientId} GetActuallyEnabledConnections: Connection {ConnectionId} not found in Auth0, skipping",
+                        EntityTypeName, clientId, connectionId);
+                }
+                // Other exceptions propagate up to trigger retry
+            }
+
+            return enabledOn.ToArray();
         }
 
         /// <inheritdoc />

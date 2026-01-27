@@ -164,6 +164,10 @@ namespace Alethic.Auth0.Operator.Controllers
         /// <inheritdoc />
         protected override async Task ApplyStatus(IManagementApiClient api, V1Client entity, Hashtable lastConf, string defaultNamespace, CancellationToken cancellationToken)
         {
+            // Diagnostic: Log entry into ApplyStatus
+            Logger.LogDebug("{EntityTypeName} {EntityNamespace}/{EntityName} ApplyStatus: entering, lastConf has {KeyCount} keys",
+                EntityTypeName, entity.Namespace(), entity.Name(), lastConf?.Count ?? 0);
+
             // Always attempt to apply secret if secretRef is specified, regardless of whether we have the clientSecret value
             // This ensures secret resources are created for existing clients even when Auth0 API doesn't return the secret
             if (entity.Spec.SecretRef is not null)
@@ -175,9 +179,17 @@ namespace Alethic.Auth0.Operator.Controllers
 
             // Handle enabled connections (add new ones and remove old ones)
             var clientId2 = (string?)lastConf["client_id"];
+            Logger.LogDebug("{EntityTypeName} {EntityNamespace}/{EntityName} ApplyStatus: client_id from lastConf = {ClientId}",
+                EntityTypeName, entity.Namespace(), entity.Name(), clientId2 ?? "(null)");
+
             if (clientId2 is not null)
             {
                 await ReconcileEnabledConnections(api, entity, clientId2, defaultNamespace, cancellationToken);
+            }
+            else
+            {
+                Logger.LogWarning("{EntityTypeName} {EntityNamespace}/{EntityName} ApplyStatus: skipping ReconcileEnabledConnections because client_id is null in lastConf",
+                    EntityTypeName, entity.Namespace(), entity.Name());
             }
 
             lastConf.Remove("client_id");
@@ -316,6 +328,41 @@ namespace Alethic.Auth0.Operator.Controllers
         async Task ReconcileEnabledConnections(IManagementApiClient api, V1Client entity, string clientId, string defaultNamespace, CancellationToken cancellationToken)
         {
             var conf = entity.Spec.Conf;
+
+            // Diagnostic logging to trace enabled_connections deserialization
+            // Serialize the entire Conf to JSON for inspection
+            try
+            {
+                var confJson = conf != null ? JsonSerializer.Serialize(conf, new JsonSerializerOptions { WriteIndented = false }) : "(null)";
+                Logger.LogDebug("{EntityTypeName} {ClientId} ReconcileEnabledConnections: Conf JSON = {ConfJson}", EntityTypeName, clientId, confJson);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(ex, "{EntityTypeName} {ClientId} ReconcileEnabledConnections: Failed to serialize Conf to JSON", EntityTypeName, clientId);
+            }
+
+            if (conf == null)
+            {
+                Logger.LogWarning("{EntityTypeName} {ClientId} ReconcileEnabledConnections: entity.Spec.Conf is NULL", EntityTypeName, clientId);
+            }
+            else if (conf.EnabledConnections == null)
+            {
+                Logger.LogWarning("{EntityTypeName} {ClientId} ReconcileEnabledConnections: EnabledConnections is NULL - check if enabled_connections is defined in spec.conf", EntityTypeName, clientId);
+            }
+            else if (conf.EnabledConnections.Length == 0)
+            {
+                Logger.LogInformation("{EntityTypeName} {ClientId} ReconcileEnabledConnections: EnabledConnections is empty array", EntityTypeName, clientId);
+            }
+            else
+            {
+                Logger.LogInformation("{EntityTypeName} {ClientId} ReconcileEnabledConnections: EnabledConnections has {Count} entries", EntityTypeName, clientId, conf.EnabledConnections.Length);
+                foreach (var connRef in conf.EnabledConnections)
+                {
+                    Logger.LogInformation("{EntityTypeName} {ClientId} ReconcileEnabledConnections: Connection ref - Name={Name}, Namespace={Namespace}, Id={Id}",
+                        EntityTypeName, clientId, connRef.Name ?? "(null)", connRef.Namespace ?? "(null)", connRef.Id ?? "(null)");
+                }
+            }
+
             var currentConnectionRefs = conf?.EnabledConnections ?? Array.Empty<V1ConnectionReference>();
             var previousConnectionIds = entity.Status.LastEnabledConnectionIds ?? Array.Empty<string>();
 
@@ -360,6 +407,15 @@ namespace Alethic.Auth0.Operator.Controllers
                 .Union(pendingDisableIds)
                 .Distinct()
                 .ToList();
+
+            // Diagnostic: Log the computed enable/disable lists
+            Logger.LogInformation("{EntityTypeName} {ClientId} ReconcileEnabledConnections: currentConnectionIds={CurrentCount}, previousConnectionIds={PreviousCount}, toEnable={EnableCount}, toDisable={DisableCount}",
+                EntityTypeName, clientId, currentConnectionIds.Length, normalizedPreviousConnectionIds.Length, connectionsToEnable.Count, connectionsToDisable.Count);
+
+            if (connectionsToEnable.Count == 0 && connectionsToDisable.Count == 0)
+            {
+                Logger.LogDebug("{EntityTypeName} {ClientId} ReconcileEnabledConnections: no connection changes needed", EntityTypeName, clientId);
+            }
 
             // Track results
             var enabledSuccessfully = new List<string>();

@@ -11,6 +11,7 @@ using Alethic.Auth0.Operator.Models;
 using k8s;
 
 using KubeOps.Abstractions.Entities;
+using KubeOps.Abstractions.Queue;
 using KubeOps.KubernetesClient;
 
 using Microsoft.Extensions.Hosting;
@@ -21,8 +22,13 @@ namespace Alethic.Auth0.Operator.Services
 
     /// <summary>
     /// Background service that watches Client CRDs and triggers Connection reconciliation
-    /// when a Client's enabledConnections change. This implements the "annotation-touch"
-    /// pattern since KubeOps 9.x does not support cross-entity requeue.
+    /// when a Client's enabledConnections change.
+    /// 
+    /// This uses the EntityRequeue delegate to trigger reconciliation. The previous
+    /// "annotation-touch" pattern doesn't work because KubeOps 9.x uses generation-based
+    /// filtering for MODIFIED events - annotation changes don't increment generation, so
+    /// they get filtered out. Using EntityRequeue creates events that bypass generation
+    /// checking since the entity is re-fetched from the API and passed to the controller.
     /// 
     /// On startup, the service pre-populates its cache from existing Clients and triggers
     /// an initial reconciliation of all referenced Connections. This ensures that even if
@@ -33,6 +39,7 @@ namespace Alethic.Auth0.Operator.Services
     {
 
         readonly IKubernetesClient _kube;
+        readonly EntityRequeue<V1Connection> _requeue;
         readonly ILogger<ClientConnectionWatcherService> _logger;
 
         /// <summary>
@@ -69,12 +76,15 @@ namespace Alethic.Auth0.Operator.Services
         /// Initializes a new instance.
         /// </summary>
         /// <param name="kube"></param>
+        /// <param name="requeue"></param>
         /// <param name="logger"></param>
         public ClientConnectionWatcherService(
             IKubernetesClient kube,
+            EntityRequeue<V1Connection> requeue,
             ILogger<ClientConnectionWatcherService> logger)
         {
             _kube = kube;
+            _requeue = requeue;
             _logger = logger;
         }
 
@@ -177,7 +187,7 @@ namespace Alethic.Auth0.Operator.Services
                     {
                         connectionCache = await _kube.ListAsync<V1Connection>(@namespace: null, cancellationToken: cancellationToken);
                     }
-                    await TouchConnectionByKeyAsync(connKey, "initial-sync", cancellationToken, connectionCache);
+                    await RequeueConnectionByKeyAsync(connKey, "initial-sync", cancellationToken, connectionCache);
                 }
 
                 _logger.LogInformation("Completed initial sync - triggered reconciliation for {Count} Connections",
@@ -272,8 +282,9 @@ namespace Alethic.Auth0.Operator.Services
             else
             {
                 // Find connections that were added or removed
-                var addedConnections = currentConnections.Except(previousConnections);
-                var removedConnections = previousConnections.Except(currentConnections);
+                // Materialize to lists to avoid multiple enumeration when logging counts
+                var addedConnections = currentConnections.Except(previousConnections).ToList();
+                var removedConnections = previousConnections.Except(currentConnections).ToList();
                 connectionsToReconcile = addedConnections.Union(removedConnections).ToHashSet();
 
                 // CRITICAL: If the Client just became "ready" (got its Auth0 ID), trigger
@@ -303,14 +314,14 @@ namespace Alethic.Auth0.Operator.Services
                 if (connectionsToReconcile.Count > 0)
                 {
                     _logger.LogDebug("Client {ClientKey} changed, will reconcile {Count} connections (added: {Added}, removed: {Removed}, ready-trigger: {ReadyTrigger}, label-trigger: {LabelTrigger})",
-                        clientKey, connectionsToReconcile.Count, addedConnections.Count(), removedConnections.Count(), hasAuth0Id && !hadAuth0Id, labelsChanged);
+                        clientKey, connectionsToReconcile.Count, addedConnections.Count, removedConnections.Count, hasAuth0Id && !hadAuth0Id, labelsChanged);
                 }
             }
 
-            // Trigger reconciliation via annotation-touch pattern
+            // Trigger reconciliation via EntityRequeue
             foreach (var connKey in connectionsToReconcile)
             {
-                await TouchConnectionByKeyAsync(connKey, clientKey, ct);
+                await RequeueConnectionByKeyAsync(connKey, clientKey, ct);
             }
         }
 
@@ -333,13 +344,13 @@ namespace Alethic.Auth0.Operator.Services
         }
 
         /// <summary>
-        /// Touches a connection to trigger reconciliation based on the normalized key format.
+        /// Requeues a connection for reconciliation based on the normalized key format.
         /// </summary>
         /// <param name="connKey">Normalized connection key (ref:ns/name or id:connectionId)</param>
         /// <param name="triggerSource">Source that triggered this reconciliation</param>
         /// <param name="ct">Cancellation token</param>
         /// <param name="connectionCache">Optional pre-fetched connection list for efficient ID lookups</param>
-        async Task TouchConnectionByKeyAsync(string connKey, string triggerSource, CancellationToken ct, IList<V1Connection>? connectionCache = null)
+        async Task RequeueConnectionByKeyAsync(string connKey, string triggerSource, CancellationToken ct, IList<V1Connection>? connectionCache = null)
         {
             if (connKey.StartsWith("ref:"))
             {
@@ -350,7 +361,7 @@ namespace Alethic.Auth0.Operator.Services
                 {
                     var ns = refPart.Substring(0, slashIndex);
                     var name = refPart.Substring(slashIndex + 1);
-                    await TouchConnectionAnnotationAsync(ns, name, triggerSource, ct);
+                    await RequeueConnectionByNameAsync(ns, name, triggerSource, ct);
                 }
                 else
                 {
@@ -361,7 +372,7 @@ namespace Alethic.Auth0.Operator.Services
             {
                 // ID-based reference: id:{connectionId}
                 var connectionId = connKey.Substring(3);
-                await TouchConnectionByIdAsync(connectionId, triggerSource, ct, connectionCache);
+                await RequeueConnectionByIdAsync(connectionId, triggerSource, ct, connectionCache);
             }
             else
             {
@@ -370,13 +381,15 @@ namespace Alethic.Auth0.Operator.Services
         }
 
         /// <summary>
-        /// Finds and touches a Connection by its Auth0 ID (status.id).
+        /// Enqueues a Connection for reconciliation by its Auth0 ID (status.id).
+        /// Uses the EntityRequeue delegate which bypasses generation filtering since the
+        /// entity is re-fetched from the API before being passed to the controller.
         /// </summary>
         /// <param name="connectionId">Auth0 connection ID to find</param>
         /// <param name="triggerSource">Source that triggered this reconciliation</param>
         /// <param name="ct">Cancellation token</param>
         /// <param name="connectionCache">Optional pre-fetched connection list for efficiency</param>
-        async Task TouchConnectionByIdAsync(string connectionId, string triggerSource, CancellationToken ct, IList<V1Connection>? connectionCache = null)
+        async Task RequeueConnectionByIdAsync(string connectionId, string triggerSource, CancellationToken ct, IList<V1Connection>? connectionCache = null)
         {
             try
             {
@@ -386,56 +399,54 @@ namespace Alethic.Auth0.Operator.Services
 
                 if (connection == null)
                 {
-                    _logger.LogDebug("Connection with Auth0 ID {ConnectionId} not found, skipping touch", connectionId);
+                    _logger.LogDebug("Connection with Auth0 ID {ConnectionId} not found, skipping requeue", connectionId);
                     return;
                 }
 
-                // Touch annotation to trigger reconciliation
-                connection.Metadata.Annotations ??= new Dictionary<string, string>();
-                connection.Metadata.Annotations["auth0.operator/last-client-change"] = DateTime.UtcNow.ToString("O");
-                connection.Metadata.Annotations["auth0.operator/triggered-by"] = triggerSource;
-
-                await _kube.UpdateAsync(connection, ct);
+                // Enqueue for immediate reconciliation using EntityRequeue
+                // This bypasses KubeOps generation filtering because EntityRequeue re-fetches
+                // the entity from the API before passing it to the controller
+                _requeue(connection, TimeSpan.Zero);
                 _logger.LogInformation("Triggered Connection {Namespace}/{Name} (Auth0 ID: {ConnectionId}) reconciliation due to Client change: {Source}",
                     connection.Metadata.NamespaceProperty, connection.Metadata.Name, connectionId, triggerSource);
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Failed to touch Connection with Auth0 ID {ConnectionId}", connectionId);
+                _logger.LogWarning(ex, "Failed to enqueue Connection with Auth0 ID {ConnectionId}", connectionId);
             }
         }
 
         /// <summary>
-        /// Touches a Connection's annotation to trigger reconciliation.
+        /// Enqueues a Connection for reconciliation by namespace and name.
+        /// Uses the EntityRequeue delegate which bypasses generation filtering since the
+        /// entity is re-fetched from the API before being passed to the controller.
         /// </summary>
         /// <param name="ns"></param>
         /// <param name="name"></param>
         /// <param name="triggerSource"></param>
         /// <param name="ct"></param>
         /// <returns></returns>
-        async Task TouchConnectionAnnotationAsync(string ns, string name, string triggerSource, CancellationToken ct)
+        async Task RequeueConnectionByNameAsync(string ns, string name, string triggerSource, CancellationToken ct)
         {
             try
             {
                 var connection = await _kube.GetAsync<V1Connection>(name, ns, ct);
                 if (connection == null)
                 {
-                    _logger.LogDebug("Connection {Namespace}/{Name} not found, skipping touch", ns, name);
+                    _logger.LogDebug("Connection {Namespace}/{Name} not found, skipping requeue", ns, name);
                     return;
                 }
 
-                // Touch annotation to trigger reconciliation
-                connection.Metadata.Annotations ??= new Dictionary<string, string>();
-                connection.Metadata.Annotations["auth0.operator/last-client-change"] = DateTime.UtcNow.ToString("O");
-                connection.Metadata.Annotations["auth0.operator/triggered-by"] = triggerSource;
-
-                await _kube.UpdateAsync(connection, ct);
+                // Enqueue for immediate reconciliation using EntityRequeue
+                // This bypasses KubeOps generation filtering because EntityRequeue re-fetches
+                // the entity from the API before passing it to the controller
+                _requeue(connection, TimeSpan.Zero);
                 _logger.LogInformation("Triggered Connection {Namespace}/{Name} reconciliation due to Client change: {Source}",
                     ns, name, triggerSource);
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Failed to touch Connection {Namespace}/{Name} annotation", ns, name);
+                _logger.LogWarning(ex, "Failed to enqueue Connection {Namespace}/{Name}", ns, name);
             }
         }
 

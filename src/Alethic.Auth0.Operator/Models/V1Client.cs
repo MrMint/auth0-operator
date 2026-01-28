@@ -32,7 +32,7 @@ namespace Alethic.Auth0.Operator.Models
             public V1TenantReference? TenantRef { get; set; }
 
             [JsonPropertyName("secretRef")]
-            public V1ClientSecretReference? SecretRef { get; set; }
+            public V1SecretReference? SecretRef { get; set; }
 
             [JsonPropertyName("find")]
             public ClientFind? Find { get; set; }

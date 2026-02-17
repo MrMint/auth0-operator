@@ -223,10 +223,39 @@ namespace Alethic.Auth0.Operator.Controllers
             var createRequest = await BuildCreateRequest(conf, defaultNamespace, cancellationToken);
 
             using var client = CreateEventStreamsClient();
-            var result = await client.CreateAsync(createRequest, cancellationToken);
 
-            return result.Id
-                ?? throw new InvalidOperationException("Event stream created but no ID returned");
+            try
+            {
+                var result = await client.CreateAsync(createRequest, cancellationToken);
+
+                return result.Id
+                    ?? throw new InvalidOperationException("Event stream created but no ID returned");
+            }
+            catch (EventStreamsApiException e) when (e.StatusCode == HttpStatusCode.Conflict)
+            {
+                // 409 Conflict means the stream already exists - fall back to find by name
+                Logger.LogWarning(
+                    "{EntityTypeName} creation returned 409 Conflict. Falling back to find by name: {Name}",
+                    EntityTypeName,
+                    conf.Name
+                );
+
+                var streams = await client.GetAllAsync(cancellationToken);
+                var match = streams.FirstOrDefault(s => s.Name == conf.Name);
+
+                if (match?.Id is not null)
+                {
+                    Logger.LogInformation(
+                        "{EntityTypeName} found existing stream by name after 409: {Id}",
+                        EntityTypeName,
+                        match.Id
+                    );
+                    return match.Id;
+                }
+
+                throw new InvalidOperationException(
+                    $"Event stream creation returned 409 Conflict but could not find existing stream by name: {conf.Name}");
+            }
         }
 
         /// <inheritdoc />

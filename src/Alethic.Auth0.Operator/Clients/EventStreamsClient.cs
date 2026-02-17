@@ -54,6 +54,7 @@ namespace Alethic.Auth0.Operator.Clients
 
         /// <summary>
         /// Gets all event streams for the tenant.
+        /// Auth0 Management API v2 returns a paginated wrapper: {"event_streams": [...]}
         /// </summary>
         public async Task<IList<EventStreamResponse>> GetAllAsync(CancellationToken cancellationToken = default)
         {
@@ -64,7 +65,8 @@ namespace Alethic.Auth0.Operator.Clients
             await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
             
             var content = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-            return JsonSerializer.Deserialize<List<EventStreamResponse>>(content, JsonOptions) ?? new List<EventStreamResponse>();
+            var wrapper = JsonSerializer.Deserialize<EventStreamListResponse>(content, JsonOptions);
+            return wrapper?.EventStreams ?? new List<EventStreamResponse>();
         }
 
         /// <summary>
@@ -226,6 +228,16 @@ namespace Alethic.Auth0.Operator.Clients
 
         [JsonPropertyName("status")]
         public string? Status { get; set; }
+    }
+
+    /// <summary>
+    /// Wrapper for the GET /event-streams response.
+    /// Auth0 Management API v2 returns {"event_streams": [...]}.
+    /// </summary>
+    public class EventStreamListResponse
+    {
+        [JsonPropertyName("event_streams")]
+        public List<EventStreamResponse>? EventStreams { get; set; }
     }
 
     /// <summary>

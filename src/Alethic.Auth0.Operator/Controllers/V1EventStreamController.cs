@@ -223,42 +223,19 @@ namespace Alethic.Auth0.Operator.Controllers
             var createRequest = await BuildCreateRequest(conf, defaultNamespace, cancellationToken);
 
             using var client = CreateEventStreamsClient();
+            var result = await client.CreateAsync(createRequest, cancellationToken);
 
-            try
-            {
-                var result = await client.CreateAsync(createRequest, cancellationToken);
-
-                return result.Id
-                    ?? throw new InvalidOperationException("Event stream created but no ID returned");
-            }
-            catch (EventStreamsApiException e) when (e.StatusCode == HttpStatusCode.Conflict)
-            {
-                // 409 Conflict means the stream already exists - fall back to find by name
-                Logger.LogWarning(
-                    "{EntityTypeName} creation returned 409 Conflict. Falling back to find by name: {Name}",
-                    EntityTypeName,
-                    conf.Name
-                );
-
-                var streams = await client.GetAllAsync(cancellationToken);
-                var match = streams.FirstOrDefault(s => s.Name == conf.Name);
-
-                if (match?.Id is not null)
-                {
-                    Logger.LogInformation(
-                        "{EntityTypeName} found existing stream by name after 409: {Id}",
-                        EntityTypeName,
-                        match.Id
-                    );
-                    return match.Id;
-                }
-
-                throw new InvalidOperationException(
-                    $"Event stream creation returned 409 Conflict but could not find existing stream by name: {conf.Name}");
-            }
+            return result.Id
+                ?? throw new InvalidOperationException("Event stream created but no ID returned");
         }
 
         /// <inheritdoc />
+        /// <remarks>
+        /// EventBridge destination fields (type, aws_account_id, aws_region) are immutable
+        /// in the Auth0 API. If these fields change, the stream is deleted and recreated
+        /// automatically (ForceNew semantics). Mutable fields (name, status, subscriptions)
+        /// are updated in-place via PATCH.
+        /// </remarks>
         protected override async Task Update(
             IManagementApiClient api,
             string id,
@@ -268,10 +245,110 @@ namespace Alethic.Auth0.Operator.Controllers
             CancellationToken cancellationToken
         )
         {
+            // Check if immutable destination fields have changed
+            if (last is not null && HasDestinationChanged(last, conf))
+            {
+                Logger.LogInformation(
+                    "{EntityTypeName} destination configuration changed (immutable field). Deleting stream {Id} for recreation.",
+                    EntityTypeName,
+                    id
+                );
+
+                using var client = CreateEventStreamsClient();
+                await client.DeleteAsync(id, cancellationToken);
+
+                // Throw RetryException to trigger re-reconciliation.
+                // Base controller will clear status.Id (Get returns null) and re-enter Find→Create flow.
+                throw new RetryException(
+                    $"EventStream {id} deleted due to immutable destination change. Will be recreated on next reconciliation."
+                );
+            }
+
             var updateRequest = await BuildUpdateRequest(conf, defaultNamespace, cancellationToken);
 
-            using var client = CreateEventStreamsClient();
-            await client.UpdateAsync(id, updateRequest, cancellationToken);
+            using var updateClient = CreateEventStreamsClient();
+            await updateClient.UpdateAsync(id, updateRequest, cancellationToken);
+        }
+
+        /// <summary>
+        /// Compares the current Auth0 destination config against the desired spec
+        /// to detect changes to immutable fields (type, aws_account_id, aws_region).
+        /// </summary>
+        /// <summary>
+        /// Compares the current Auth0 destination config against the desired spec
+        /// to detect changes to immutable fields (type, aws_account_id, aws_region).
+        /// Note: lastConf keys are PascalCase because TransformToSystemTextJson
+        /// round-trips through Newtonsoft (which uses C# property names) then STJ.
+        /// </summary>
+        private bool HasDestinationChanged(Hashtable lastConf, EventStreamConf conf)
+        {
+            var lastDestination = GetNestedValue(lastConf, "Destination");
+            if (lastDestination is null)
+                return false;
+
+            var lastType = GetStringValue(lastDestination, "Type");
+            var desiredType = ToApiString(conf.Type);
+            if (!string.Equals(lastType, desiredType, StringComparison.OrdinalIgnoreCase))
+            {
+                Logger.LogDebug(
+                    "{EntityTypeName} destination type changed: {Old} → {New}",
+                    EntityTypeName,
+                    lastType,
+                    desiredType
+                );
+                return true;
+            }
+
+            var lastConfig = GetNestedValue(lastDestination, "Configuration");
+            if (lastConfig is null)
+                return false;
+
+            // Compare EventBridge-specific immutable fields
+            if (conf.Type == EventStreamType.EventBridge && conf.Sink?.EventBridge is { } desired)
+            {
+                var lastAccountId = GetStringValue(lastConfig, "AwsAccountId");
+                var lastRegion = GetStringValue(lastConfig, "AwsRegion");
+
+                if (!string.Equals(lastAccountId, desired.AwsAccountId, StringComparison.Ordinal))
+                {
+                    Logger.LogDebug(
+                        "{EntityTypeName} EventBridge aws_account_id changed: {Old} → {New}",
+                        EntityTypeName,
+                        lastAccountId,
+                        desired.AwsAccountId
+                    );
+                    return true;
+                }
+
+                if (!string.Equals(lastRegion, desired.AwsRegion, StringComparison.OrdinalIgnoreCase))
+                {
+                    Logger.LogDebug(
+                        "{EntityTypeName} EventBridge aws_region changed: {Old} → {New}",
+                        EntityTypeName,
+                        lastRegion,
+                        desired.AwsRegion
+                    );
+                    return true;
+                }
+            }
+
+            // Compare Webhook-specific immutable fields
+            if (conf.Type == EventStreamType.Webhook && conf.Sink?.Webhook is { } desiredWebhook)
+            {
+                var lastEndpoint = GetStringValue(lastConfig, "WebhookEndpoint");
+                if (!string.Equals(lastEndpoint, desiredWebhook.Url, StringComparison.Ordinal))
+                {
+                    Logger.LogDebug(
+                        "{EntityTypeName} Webhook endpoint changed: {Old} → {New}",
+                        EntityTypeName,
+                        lastEndpoint,
+                        desiredWebhook.Url
+                    );
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         /// <inheritdoc />
@@ -283,20 +360,22 @@ namespace Alethic.Auth0.Operator.Controllers
             CancellationToken cancellationToken
         )
         {
-            entity.Status.CurrentStatus = lastConf["status"]?.ToString();
+            // Note: lastConf keys are PascalCase because TransformToSystemTextJson
+            // round-trips through Newtonsoft (which uses C# property names) then STJ.
+            entity.Status.CurrentStatus = lastConf["Status"]?.ToString();
 
             // Extract destination type and configuration
             // Handle various deserialization types (Hashtable, JsonElement, IDictionary)
-            var destination = GetNestedValue(lastConf, "destination");
+            var destination = GetNestedValue(lastConf, "Destination");
             if (destination is not null)
             {
-                entity.Status.Type = GetStringValue(destination, "type");
+                entity.Status.Type = GetStringValue(destination, "Type");
 
                 // Extract AWS Partner Event Source for EventBridge destinations
-                var configuration = GetNestedValue(destination, "configuration");
+                var configuration = GetNestedValue(destination, "Configuration");
                 if (configuration is not null)
                 {
-                    var partnerEventSource = GetStringValue(configuration, "aws_partner_event_source");
+                    var partnerEventSource = GetStringValue(configuration, "AwsPartnerEventSource");
                     if (!string.IsNullOrEmpty(partnerEventSource))
                     {
                         entity.Status.AwsPartnerEventSource = partnerEventSource;
@@ -312,20 +391,20 @@ namespace Alethic.Auth0.Operator.Controllers
             }
 
             // Extract subscribed events
-            if (lastConf["subscriptions"] is IEnumerable<object> subscriptions)
+            if (lastConf["Subscriptions"] is IEnumerable<object> subscriptions)
             {
                 entity.Status.SubscribedEvents = subscriptions
-                    .Select(s => GetStringValue(s, "event_type"))
+                    .Select(s => GetStringValue(s, "EventType"))
                     .Where(e => e is not null)
                     .Cast<string>()
                     .ToList();
             }
-            else if (lastConf["subscriptions"] is System.Text.Json.JsonElement subsElement &&
+            else if (lastConf["Subscriptions"] is System.Text.Json.JsonElement subsElement &&
                      subsElement.ValueKind == System.Text.Json.JsonValueKind.Array)
             {
                 entity.Status.SubscribedEvents = subsElement
                     .EnumerateArray()
-                    .Select(s => s.TryGetProperty("event_type", out var et) ? et.GetString() : null)
+                    .Select(s => s.TryGetProperty("EventType", out var et) ? et.GetString() : null)
                     .Where(e => e is not null)
                     .Cast<string>()
                     .ToList();
@@ -418,8 +497,10 @@ namespace Alethic.Auth0.Operator.Controllers
 
         /// <summary>
         /// Builds an update request from the EventStreamConf.
+        /// Note: Destination is not included in updates - Auth0 does not allow
+        /// changing the destination type or configuration after creation.
         /// </summary>
-        private async Task<EventStreamUpdateRequest> BuildUpdateRequest(
+        private Task<EventStreamUpdateRequest> BuildUpdateRequest(
             EventStreamConf conf,
             string defaultNamespace,
             CancellationToken cancellationToken
@@ -437,9 +518,7 @@ namespace Alethic.Auth0.Operator.Controllers
                     .ToList(),
             };
 
-            request.Destination = await BuildDestination(conf, defaultNamespace, cancellationToken);
-
-            return request;
+            return Task.FromResult(request);
         }
 
         /// <summary>

@@ -232,11 +232,11 @@ namespace Alethic.Auth0.Operator.Clients
 
     /// <summary>
     /// Wrapper for the GET /event-streams response.
-    /// Auth0 Management API v2 returns {"event_streams": [...]}.
+    /// Auth0 Management API v2 returns {"eventStreams": [...]}.
     /// </summary>
     public class EventStreamListResponse
     {
-        [JsonPropertyName("event_streams")]
+        [JsonPropertyName("eventStreams")]
         public List<EventStreamResponse>? EventStreams { get; set; }
     }
 

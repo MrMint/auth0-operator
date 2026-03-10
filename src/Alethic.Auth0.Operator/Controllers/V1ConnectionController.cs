@@ -21,6 +21,10 @@ using Auth0.ManagementApi;
 using Auth0.ManagementApi.Models;
 using Auth0.ManagementApi.Paging;
 
+using EnabledClientsGetRequest = Auth0.ManagementApi.Models.Connections.EnabledClientsGetRequest;
+using EnabledClientsToUpdate = Auth0.ManagementApi.Models.Connections.EnabledClientsToUpdate;
+using EnabledClientsUpdateRequest = Auth0.ManagementApi.Models.Connections.EnabledClientsUpdateRequest;
+
 using k8s.Models;
 
 using KubeOps.Abstractions.Controller;
@@ -44,6 +48,12 @@ namespace Alethic.Auth0.Operator.Controllers
         V1TenantEntityController<V1Connection, V1Connection.SpecDef, V1Connection.StatusDef, ConnectionConf>,
         IEntityController<V1Connection>
     {
+        /// <summary>
+        /// Page/batch size used for paginated reads and batched writes against
+        /// the <c>/connections/{id}/clients</c> endpoint.
+        /// </summary>
+        const int PageSize = 50;
+
         /// <summary>
         /// Holds the current entity being reconciled.
         /// Used to access CRD metadata name/namespace in Create/Update methods.
@@ -79,6 +89,13 @@ namespace Alethic.Auth0.Operator.Controllers
         /// <inheritdoc />
         protected override string EntityTypeName => "Connection";
 
+        /// <summary>
+        /// Minimum estimate: +1 for GetEnabledClients in Get(), +1 for
+        /// UpdateEnabledClients in Create()/Update(). Actual count may be
+        /// higher when pagination or batching kicks in.
+        /// </summary>
+        protected override int EstimatedApiCalls => 4;
+
         /// <inheritdoc />
         protected override async Task<bool> Reconcile(V1Connection entity, CancellationToken cancellationToken)
         {
@@ -112,7 +129,10 @@ namespace Alethic.Auth0.Operator.Controllers
                 dict["is_domain_connection"] = self.IsDomainConnection;
                 dict["show_as_button"] = self.ShowAsButton;
                 dict["provisioning_ticket_url"] = self.ProvisioningTicketUrl;
-                dict["enabled_clients"] = self.EnabledClients;
+
+                // Fetch enabled_clients via the dedicated endpoint.
+                dict["enabled_clients"] = await GetAllEnabledClientIdsAsync(api, id, cancellationToken);
+
                 dict["options"] = TransformToSystemTextJson<Hashtable?>(self.Options);
                 dict["metadata"] = TransformToSystemTextJson<Hashtable?>(self.Metadata);
                 return dict;
@@ -193,11 +213,29 @@ namespace Alethic.Auth0.Operator.Controllers
                 entityName,
                 entityNamespace,
                 cancellationToken);
-            req.EnabledClients = aggregatedClientIds;
 
             var self = await api.Connections.CreateAsync(req, cancellationToken);
             if (self is null)
                 throw new InvalidOperationException();
+
+            // Sync enabled clients via the dedicated connection clients endpoint
+            // (enabled_clients on ConnectionCreateRequest is deprecated)
+            if (aggregatedClientIds.Length > 0)
+            {
+                try
+                {
+                    await SyncEnabledClientsAsync(api, self.Id, aggregatedClientIds, Array.Empty<string>(), cancellationToken);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    // Connection was created but client sync failed. Log at Warning level so
+                    // operators have visibility. The next reconciliation loop will fix this
+                    // via the Update path since the connection now has a status.id.
+                    Logger.LogWarning(ex,
+                        "{EntityTypeName} connection {ConnectionId} created successfully but enabled_clients sync failed — will retry on next reconciliation",
+                        EntityTypeName, self.Id);
+                }
+            }
 
             Logger.LogInformation("{EntityTypeName} successfully created connection in Auth0 with ID: {ConnectionId}, name: {ConnectionName} and strategy: {Strategy}", EntityTypeName, self.Id, conf.Name, conf.Strategy);
             return self.Id;
@@ -223,7 +261,6 @@ namespace Alethic.Auth0.Operator.Controllers
                 entityNamespace,
                 cancellationToken);
 
-            req.EnabledClients = aggregatedClientIds;
             Logger.LogDebug("{EntityTypeName} aggregated {Count} enabled_clients for connection {ConnectionId}",
                 EntityTypeName, aggregatedClientIds.Length, id);
 
@@ -234,6 +271,12 @@ namespace Alethic.Auth0.Operator.Controllers
                 req.Options = options;
 
             await api.Connections.UpdateAsync(id, req, cancellationToken);
+
+            // Sync enabled clients via the dedicated connection clients endpoint
+            // (enabled_clients on ConnectionUpdateRequest is deprecated)
+            var currentEnabledClients = last?["enabled_clients"] as string[] ?? Array.Empty<string>();
+            await SyncEnabledClientsAsync(api, id, aggregatedClientIds, currentEnabledClients, cancellationToken);
+
             Logger.LogInformation("{EntityTypeName} successfully updated connection in Auth0 with ID: {ConnectionId}, name: {ConnectionName} and strategy: {Strategy}", EntityTypeName, id, conf.Name, conf.Strategy);
         }
 
@@ -379,8 +422,115 @@ namespace Alethic.Auth0.Operator.Controllers
         }
 
         /// <summary>
+        /// Retrieves all enabled client IDs for a connection using the dedicated
+        /// <c>/api/v2/connections/{id}/clients</c> endpoint.
+        /// Handles checkpoint-based pagination to fetch all results.
+        /// </summary>
+        /// <param name="api">The Auth0 Management API client</param>
+        /// <param name="connectionId">The Auth0 connection ID</param>
+        /// <param name="cancellationToken">Cancellation token</param>
+        /// <returns>Array of Auth0 client IDs enabled on this connection</returns>
+        async Task<string[]> GetAllEnabledClientIdsAsync(
+            IManagementApiClient api,
+            string connectionId,
+            CancellationToken cancellationToken)
+        {
+            var allClientIds = new List<string>();
+            string? from = null;
+
+            while (true)
+            {
+                // CheckpointPaginationInfo treats null 'from' as "start from the beginning"
+#pragma warning disable CS8625
+                var pagination = new CheckpointPaginationInfo(PageSize, from!);
+#pragma warning restore CS8625
+                var page = await api.Connections.GetEnabledClientsAsync(
+                    new EnabledClientsGetRequest { ConnectionId = connectionId },
+                    pagination,
+                    cancellationToken);
+
+                foreach (var ec in page)
+                {
+                    if (!string.IsNullOrEmpty(ec.ClientId))
+                        allClientIds.Add(ec.ClientId);
+                }
+
+                if (page.Paging?.Next == null)
+                    break;
+
+                from = page.Paging.Next;
+            }
+
+            return allClientIds.ToArray();
+        }
+
+        /// <summary>
+        /// Syncs the enabled clients for a connection to the desired state using the dedicated
+        /// <c>PATCH /api/v2/connections/{id}/clients</c> endpoint.
+        /// Computes the diff between current and desired states and sends only the changes.
+        /// Batches updates in chunks to avoid exceeding API payload limits.
+        /// </summary>
+        /// <param name="api">The Auth0 Management API client</param>
+        /// <param name="connectionId">The Auth0 connection ID</param>
+        /// <param name="desiredClientIds">The desired set of enabled client IDs</param>
+        /// <param name="currentClientIds">The current set of enabled client IDs (from Get)</param>
+        /// <param name="cancellationToken">Cancellation token</param>
+        async Task SyncEnabledClientsAsync(
+            IManagementApiClient api,
+            string connectionId,
+            string[] desiredClientIds,
+            string[] currentClientIds,
+            CancellationToken cancellationToken)
+        {
+            var currentSet = new HashSet<string>(currentClientIds);
+            var desiredSet = new HashSet<string>(desiredClientIds);
+
+            var updates = new List<EnabledClientsToUpdate>();
+
+            // Enable clients that should be enabled but aren't
+            foreach (var clientId in desiredSet.Except(currentSet))
+            {
+                updates.Add(new EnabledClientsToUpdate { ClientId = clientId, Status = true });
+                Logger.LogDebug("{EntityTypeName} enabling client {ClientId} on connection {ConnectionId}",
+                    EntityTypeName, clientId, connectionId);
+            }
+
+            // Disable clients that are currently enabled but shouldn't be
+            foreach (var clientId in currentSet.Except(desiredSet))
+            {
+                updates.Add(new EnabledClientsToUpdate { ClientId = clientId, Status = false });
+                Logger.LogDebug("{EntityTypeName} disabling client {ClientId} on connection {ConnectionId}",
+                    EntityTypeName, clientId, connectionId);
+            }
+
+            if (updates.Count > 0)
+            {
+                var toEnable = updates.Count(u => u.Status == true);
+                var toDisable = updates.Count(u => u.Status == false);
+                Logger.LogInformation(
+                    "{EntityTypeName} syncing enabled client changes for connection {ConnectionId} ({Enable} to enable, {Disable} to disable)",
+                    EntityTypeName, connectionId, toEnable, toDisable);
+
+                // Send in batches to avoid exceeding API payload limits
+                foreach (var batch in updates.Chunk(PageSize))
+                {
+                    await api.Connections.UpdateEnabledClientsAsync(
+                        connectionId,
+                        new EnabledClientsUpdateRequest { EnabledClients = batch.ToList() },
+                        cancellationToken);
+                }
+            }
+            else
+            {
+                Logger.LogDebug("{EntityTypeName} no enabled client changes needed for connection {ConnectionId}",
+                    EntityTypeName, connectionId);
+            }
+        }
+
+        /// <summary>
         /// Applies the specified configuration to the request object.
-        /// Note: enabled_clients is not applied here - it's computed via aggregation from Client CRDs.
+        /// Note: enabled_clients is not applied here - it's synced separately via the dedicated
+        /// <c>/api/v2/connections/{id}/clients</c> endpoint.
         /// </summary>
         /// <param name="req"></param>
         /// <param name="conf"></param>
@@ -397,7 +547,7 @@ namespace Alethic.Auth0.Operator.Controllers
             req.IsDomainConnection = conf.IsDomainConnection ?? false;
             req.ShowAsButton = conf.ShowAsButton;
             // Note: EnabledClients is intentionally NOT set here.
-            // It's computed via aggregation in Update() from all Client CRDs.
+            // It's synced separately via the dedicated /api/v2/connections/{id}/clients endpoint.
         }
 
         /// <inheritdoc />

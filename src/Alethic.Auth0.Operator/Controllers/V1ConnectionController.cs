@@ -116,7 +116,9 @@ namespace Alethic.Auth0.Operator.Controllers
         {
             try
             {
-                var self = await api.Connections.GetAsync(id, cancellationToken: cancellationToken);
+                // Exclude enabled_clients from the response — that field is deprecated on
+                // GET /api/v2/connections/{id}; we fetch it via the dedicated endpoint below.
+                var self = await api.Connections.GetAsync(id, fields: "enabled_clients", includeFields: false, cancellationToken: cancellationToken);
                 if (self == null)
                     return null;
 
@@ -152,7 +154,8 @@ namespace Alethic.Auth0.Operator.Controllers
                 {
                     try
                     {
-                        var connection = await api.Connections.GetAsync(connectionId, cancellationToken: cancellationToken);
+                        // Exclude enabled_clients — deprecated on GET /api/v2/connections/{id}.
+                        var connection = await api.Connections.GetAsync(connectionId, fields: "enabled_clients", includeFields: false, cancellationToken: cancellationToken);
                         Logger.LogInformation("{EntityTypeName} {EntityNamespace}/{EntityName} found existing connection: {Name}", EntityTypeName, entity.Namespace(), entity.Name(), connection.Name);
                         return connection.Id;
                     }
@@ -171,7 +174,8 @@ namespace Alethic.Auth0.Operator.Controllers
                 if (conf is null || string.IsNullOrEmpty(conf.Name))
                     return null;
 
-                var list = await api.Connections.GetAllAsync(new GetConnectionsRequest(), (PaginationInfo?)null, cancellationToken);
+                // Exclude enabled_clients — deprecated on GET /api/v2/connections list responses.
+                var list = await api.Connections.GetAllAsync(new GetConnectionsRequest { Fields = "enabled_clients", IncludeFields = false }, (PaginationInfo?)null, cancellationToken);
                 var self = list.FirstOrDefault(i => i.Name == conf.Name);
                 if (self is not null)
                     Logger.LogInformation("{EntityTypeName} {EntityNamespace}/{EntityName} found existing connection by name: {Name}", EntityTypeName, entity.Namespace(), entity.Name(), conf.Name);

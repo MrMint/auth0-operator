@@ -341,6 +341,12 @@ namespace Alethic.Auth0.Operator.Controllers
                     Logger.LogDebug("{EntityTypeName} {EntityNamespace}/{EntityName} initialized empty clientId in secret {SecretName}", EntityTypeName, entity.Namespace(), entity.Name(), entity.Spec.SecretRef.Name);
                 }
 
+                // Mirror clientId under the capitalized "clientID" key for consumers that
+                // require that exact casing (e.g. the AWS Load Balancer Controller's
+                // authenticate-oidc action). This is purely additive and backfills the key
+                // onto pre-existing secrets that predate it. clientId is guaranteed present above.
+                secret.StringData["clientID"] = secret.StringData["clientId"];
+
                 // Handle clientSecret - for existing clients, Auth0 API doesn't return the secret
                 if (clientSecret is not null)
                 {

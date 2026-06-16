@@ -116,9 +116,12 @@ namespace Alethic.Auth0.Operator.Controllers
         {
             try
             {
-                // Exclude enabled_clients from the response — that field is deprecated on
-                // GET /api/v2/connections/{id}; we fetch it via the dedicated endpoint below.
-                var self = await api.Connections.GetAsync(id, fields: "enabled_clients", includeFields: false, cancellationToken: cancellationToken);
+                // Request only the fields we read, via an allow-list (include_fields=true).
+                // We must NOT name enabled_clients at all: it is deprecated on
+                // GET /api/v2/connections/{id}, and merely referencing it in the fields param
+                // (even to exclude it with include_fields=false) still trips Auth0's deprecation
+                // detection. enabled_clients is fetched via the dedicated endpoint below.
+                var self = await api.Connections.GetAsync(id, fields: "id,name,display_name,strategy,realms,is_domain_connection,show_as_button,provisioning_ticket_url,options,metadata", includeFields: true, cancellationToken: cancellationToken);
                 if (self == null)
                     return null;
 
@@ -154,8 +157,9 @@ namespace Alethic.Auth0.Operator.Controllers
                 {
                     try
                     {
-                        // Exclude enabled_clients — deprecated on GET /api/v2/connections/{id}.
-                        var connection = await api.Connections.GetAsync(connectionId, fields: "enabled_clients", includeFields: false, cancellationToken: cancellationToken);
+                        // Allow-list only the fields we read (id, name). Do not name enabled_clients
+                        // — referencing it at all on GET /api/v2/connections/{id} trips deprecation detection.
+                        var connection = await api.Connections.GetAsync(connectionId, fields: "id,name", includeFields: true, cancellationToken: cancellationToken);
                         Logger.LogInformation("{EntityTypeName} {EntityNamespace}/{EntityName} found existing connection: {Name}", EntityTypeName, entity.Namespace(), entity.Name(), connection.Name);
                         return connection.Id;
                     }
@@ -174,8 +178,9 @@ namespace Alethic.Auth0.Operator.Controllers
                 if (conf is null || string.IsNullOrEmpty(conf.Name))
                     return null;
 
-                // Exclude enabled_clients — deprecated on GET /api/v2/connections list responses.
-                var list = await api.Connections.GetAllAsync(new GetConnectionsRequest { Fields = "enabled_clients", IncludeFields = false }, (PaginationInfo?)null, cancellationToken);
+                // Allow-list only the fields we read (id, name). Do not name enabled_clients
+                // — referencing it at all on GET /api/v2/connections trips deprecation detection.
+                var list = await api.Connections.GetAllAsync(new GetConnectionsRequest { Fields = "id,name", IncludeFields = true }, (PaginationInfo?)null, cancellationToken);
                 var self = list.FirstOrDefault(i => i.Name == conf.Name);
                 if (self is not null)
                     Logger.LogInformation("{EntityTypeName} {EntityNamespace}/{EntityName} found existing connection by name: {Name}", EntityTypeName, entity.Namespace(), entity.Name(), conf.Name);

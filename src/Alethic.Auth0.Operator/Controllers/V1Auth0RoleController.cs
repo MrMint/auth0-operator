@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections;
 using System.Linq;
 using System.Net;
@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using Alethic.Auth0.Operator.Core.Models.Role;
 using Alethic.Auth0.Operator.Models;
 using Alethic.Auth0.Operator.Options;
+using Alethic.Auth0.Operator.Paging;
 using Alethic.Auth0.Operator.RateLimiting;
 
 using Auth0.Core.Exceptions;
@@ -106,7 +107,9 @@ namespace Alethic.Auth0.Operator.Controllers
                 // If a name filter is specified, search by name
                 if (spec.Find.NameFilter is string nameFilter)
                 {
-                    var roles = await api.Roles.GetAllAsync(new GetRolesRequest() { NameFilter = nameFilter }, cancellationToken: cancellationToken);
+                    var roles = await Auth0Paging.GetAllOffsetPagesAsync<Role>(
+                        pagination => api.Roles.GetAllAsync(new GetRolesRequest() { NameFilter = nameFilter }, pagination, cancellationToken),
+                        cancellationToken);
                     var role = roles.FirstOrDefault(r => r.Name == nameFilter);
                     if (role is not null)
                     {
@@ -129,7 +132,9 @@ namespace Alethic.Auth0.Operator.Controllers
                 if (string.IsNullOrWhiteSpace(conf.Name))
                     return null;
 
-                var roles = await api.Roles.GetAllAsync(new GetRolesRequest() { NameFilter = conf.Name }, cancellationToken: cancellationToken);
+                var roles = await Auth0Paging.GetAllOffsetPagesAsync<Role>(
+                    pagination => api.Roles.GetAllAsync(new GetRolesRequest() { NameFilter = conf.Name }, pagination, cancellationToken),
+                    cancellationToken);
                 var self = roles.FirstOrDefault(i => i.Name == conf.Name);
                 return self?.Id;
             }

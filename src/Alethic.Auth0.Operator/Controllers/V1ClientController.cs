@@ -12,6 +12,7 @@ using Alethic.Auth0.Operator.Core.Models;
 using Alethic.Auth0.Operator.Core.Models.Client;
 using Alethic.Auth0.Operator.Models;
 using Alethic.Auth0.Operator.Options;
+using Alethic.Auth0.Operator.Paging;
 using Alethic.Auth0.Operator.RateLimiting;
 
 using Auth0.Core.Exceptions;
@@ -119,7 +120,9 @@ namespace Alethic.Auth0.Operator.Controllers
                 if (conf is null)
                     return null;
 
-                var list = await api.Clients.GetAllAsync(new GetClientsRequest() { Fields = "client_id,name" }, cancellationToken: cancellationToken);
+                var list = await Auth0Paging.GetAllCheckpointPagesAsync<Client>(
+                    pagination => api.Clients.GetAllAsync(new GetClientsRequest() { Fields = "client_id,name" }, pagination, cancellationToken),
+                    cancellationToken);
                 var self = list.FirstOrDefault(i => i.Name == conf.Name);
                 return self?.ClientId;
             }

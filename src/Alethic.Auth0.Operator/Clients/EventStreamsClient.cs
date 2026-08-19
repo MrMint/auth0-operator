@@ -53,20 +53,50 @@ namespace Alethic.Auth0.Operator.Clients
         }
 
         /// <summary>
-        /// Gets all event streams for the tenant.
-        /// Auth0 Management API v2 returns a paginated wrapper: {"event_streams": [...]}
+        /// Number of event streams to request per page. 100 is the maximum Auth0 accepts.
         /// </summary>
+        private const int PageSize = 100;
+
+        /// <summary>
+        /// Gets all event streams for the tenant.
+        /// </summary>
+        /// <remarks>
+        /// The response is a checkpoint-paginated wrapper: <c>{"eventStreams": [...], "next": "..."}</c>.
+        /// Auth0 defaults to returning 50 per call, so the <c>next</c> cursor has to be followed or
+        /// this silently returns only the first page.
+        /// </remarks>
         public async Task<IList<EventStreamResponse>> GetAllAsync(CancellationToken cancellationToken = default)
         {
-            var uri = new Uri(_baseUri, "event-streams");
-            using var request = CreateRequest(HttpMethod.Get, uri);
-            
-            var response = await _httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
-            await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
-            
-            var content = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-            var wrapper = JsonSerializer.Deserialize<EventStreamListResponse>(content, JsonOptions);
-            return wrapper?.EventStreams ?? new List<EventStreamResponse>();
+            var all = new List<EventStreamResponse>();
+            string? from = null;
+
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var query = $"event-streams?take={PageSize}";
+                if (string.IsNullOrEmpty(from) == false)
+                    query += $"&from={Uri.EscapeDataString(from)}";
+
+                var uri = new Uri(_baseUri, query);
+                using var request = CreateRequest(HttpMethod.Get, uri);
+
+                var response = await _httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
+                await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
+
+                var content = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+                var wrapper = JsonSerializer.Deserialize<EventStreamListResponse>(content, JsonOptions);
+                if (wrapper?.EventStreams is { Count: > 0 } page)
+                    all.AddRange(page);
+                else
+                    break;
+
+                from = wrapper.Next;
+                if (string.IsNullOrEmpty(from))
+                    break;
+            }
+
+            return all;
         }
 
         /// <summary>
@@ -238,6 +268,12 @@ namespace Alethic.Auth0.Operator.Clients
     {
         [JsonPropertyName("eventStreams")]
         public List<EventStreamResponse>? EventStreams { get; set; }
+
+        /// <summary>
+        /// Checkpoint cursor for the next page, absent on the last page.
+        /// </summary>
+        [JsonPropertyName("next")]
+        public string? Next { get; set; }
     }
 
     /// <summary>

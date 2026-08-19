@@ -308,6 +308,28 @@ namespace Alethic.Auth0.Operator.Controllers
             Logger.LogInformation("{EntityTypeName} successfully updated connection in Auth0 with ID: {ConnectionId}, name: {ConnectionName} and strategy: {Strategy}", EntityTypeName, id, conf.Name, conf.Strategy);
         }
 
+        /// <inheritdoc />
+        protected override Task ApplyStatus(
+            IManagementApiClient api,
+            V1Connection entity,
+            Hashtable lastConf,
+            string defaultNamespace,
+            CancellationToken cancellationToken
+        )
+        {
+            // Connection options carry strategy-specific credentials: client_secret for the
+            // federated strategies, and equivalents elsewhere. status.lastConf is readable by
+            // anyone holding get on the Connection CRD, and RBAC cannot grant a spec read
+            // without also granting status, so the blob is dropped wholesale rather than
+            // filtered. Auth0's option set is strategy-dependent and open-ended, so a
+            // deny-list of known-sensitive key names would fail open on anything new.
+            //
+            // Nothing reads status.lastConf back. Update() receives the live Get() result
+            // rather than the persisted status, so dropping this cannot affect reconciliation.
+            lastConf.Remove("options");
+            return base.ApplyStatus(api, entity, lastConf, defaultNamespace, cancellationToken);
+        }
+
         /// <summary>
         /// Aggregates enabled client IDs from all Client CRDs that reference this connection.
         /// Uses label-based indexing for efficient lookups, plus ID-based reference fallback.

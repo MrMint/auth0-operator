@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using Alethic.Auth0.Operator.Core.Models.ResourceServer;
 using Alethic.Auth0.Operator.Models;
 using Alethic.Auth0.Operator.Options;
+using Alethic.Auth0.Operator.Paging;
 using Alethic.Auth0.Operator.RateLimiting;
 
 using Auth0.Core.Exceptions;
@@ -86,7 +87,9 @@ namespace Alethic.Auth0.Operator.Controllers
             if (conf is null)
                 return null;
 
-            var list = await api.ResourceServers.GetAllAsync(new ResourceServerGetRequest() { }, cancellationToken: cancellationToken);
+            var list = await Auth0Paging.GetAllOffsetPagesAsync<ResourceServer>(
+                pagination => api.ResourceServers.GetAllAsync(new ResourceServerGetRequest() { }, pagination, cancellationToken),
+                cancellationToken);
             var self = list.FirstOrDefault(i => i.Identifier == conf.Identifier);
             return self?.Id;
         }

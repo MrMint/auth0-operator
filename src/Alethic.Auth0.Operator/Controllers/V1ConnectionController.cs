@@ -14,6 +14,7 @@ using Alethic.Auth0.Operator.Core.Models.Client;
 using Alethic.Auth0.Operator.Core.Models.Connection;
 using Alethic.Auth0.Operator.Models;
 using Alethic.Auth0.Operator.Options;
+using Alethic.Auth0.Operator.Paging;
 using Alethic.Auth0.Operator.RateLimiting;
 
 using Auth0.Core.Exceptions;
@@ -196,7 +197,9 @@ namespace Alethic.Auth0.Operator.Controllers
 
                 // Allow-list only the fields we read (id, name). Do not name enabled_clients
                 // — referencing it at all on GET /api/v2/connections trips deprecation detection.
-                var list = await api.Connections.GetAllAsync(new GetConnectionsRequest { Fields = "id,name", IncludeFields = true }, (PaginationInfo?)null, cancellationToken);
+                var list = await Auth0Paging.GetAllCheckpointPagesAsync<Connection>(
+                    pagination => api.Connections.GetAllAsync(new GetConnectionsRequest { Fields = "id,name", IncludeFields = true }, pagination, cancellationToken),
+                    cancellationToken);
                 var self = list.FirstOrDefault(i => i.Name == conf.Name);
                 if (self is not null)
                     Logger.LogInformation("{EntityTypeName} {EntityNamespace}/{EntityName} found existing connection by name: {Name}", EntityTypeName, entity.Namespace(), entity.Name(), conf.Name);

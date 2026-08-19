@@ -55,6 +55,24 @@ namespace Alethic.Auth0.Operator.Controllers
         const int PageSize = 50;
 
         /// <summary>
+        /// Fields requested from <c>GET /api/v2/connections/{id}</c>.
+        /// </summary>
+        /// <remarks>
+        /// This is an allow-list (<c>include_fields=true</c>) for two reasons:
+        /// <list type="bullet">
+        /// <item><description>enabled_clients is deprecated on this endpoint, and naming it in the
+        /// fields parameter trips Auth0's deprecation detection even when it is only being excluded
+        /// with <c>include_fields=false</c>. It is read from the dedicated
+        /// <c>/connections/{id}/clients</c> endpoint instead.</description></item>
+        /// <item><description>Auth0 validates this parameter against a fixed set and rejects the
+        /// entire request with a 400 when it contains anything outside that set, so every entry here
+        /// must be one Auth0 currently accepts. <c>realms</c> and <c>is_domain_connection</c> are no
+        /// longer accepted and therefore cannot be read back at all.</description></item>
+        /// </list>
+        /// </remarks>
+        const string GetFields = "id,name,display_name,strategy,show_as_button,provisioning_ticket_url,options,metadata";
+
+        /// <summary>
         /// Holds the current entity being reconciled.
         /// Used to access CRD metadata name/namespace in Create/Update methods.
         /// </summary>
@@ -116,12 +134,8 @@ namespace Alethic.Auth0.Operator.Controllers
         {
             try
             {
-                // Request only the fields we read, via an allow-list (include_fields=true).
-                // We must NOT name enabled_clients at all: it is deprecated on
-                // GET /api/v2/connections/{id}, and merely referencing it in the fields param
-                // (even to exclude it with include_fields=false) still trips Auth0's deprecation
-                // detection. enabled_clients is fetched via the dedicated endpoint below.
-                var self = await api.Connections.GetAsync(id, fields: "id,name,display_name,strategy,realms,is_domain_connection,show_as_button,provisioning_ticket_url,options,metadata", includeFields: true, cancellationToken: cancellationToken);
+                // Request only the fields we read, via an allow-list. See GetFields for why.
+                var self = await api.Connections.GetAsync(id, fields: GetFields, includeFields: true, cancellationToken: cancellationToken);
                 if (self == null)
                     return null;
 
@@ -130,8 +144,10 @@ namespace Alethic.Auth0.Operator.Controllers
                 dict["name"] = self.Name;
                 dict["display_name"] = self.DisplayName;
                 dict["strategy"] = self.Strategy;
-                dict["realms"] = self.Realms;
-                dict["is_domain_connection"] = self.IsDomainConnection;
+
+                // realms and is_domain_connection are absent by necessity: Auth0 no longer accepts
+                // them in the fields allow-list, so they cannot be read back. They stay write-only,
+                // applied from spec.conf by ApplyConfToRequest.
                 dict["show_as_button"] = self.ShowAsButton;
                 dict["provisioning_ticket_url"] = self.ProvisioningTicketUrl;
 

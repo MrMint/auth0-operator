@@ -12,8 +12,8 @@
     <ChartItem Include="*.yaml" TargetPath="%(Filename)%(Extension)" />
     <ChartItem Include="values.schema.json" TargetPath="values.schema.json" />
     <!-- CRDs go to Helm's special crds/ directory (not templates/) so helm template excludes them by default -->
-    <ChartItem Include="..\..\src\Alethic.Auth0.Operator\config\*_kubernetes_auth0_com.yaml" TargetPath="crds\%(Filename)%(Extension)" />
-    <CrdFile Include="..\..\src\Alethic.Auth0.Operator\config\*_kubernetes_auth0_com.yaml" />
+    <ChartItem Include="crds\*_kubernetes_auth0_com.yaml" TargetPath="crds\%(Filename)%(Extension)" />
+    <CrdFile Include="crds\*_kubernetes_auth0_com.yaml" />
   </ItemGroup>
   <ItemGroup>
     <Folder Include="templates\" />

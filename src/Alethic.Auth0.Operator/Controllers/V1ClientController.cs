@@ -120,7 +120,11 @@ namespace Alethic.Auth0.Operator.Controllers
                 if (conf is null)
                     return null;
 
-                var list = await Auth0Paging.GetAllCheckpointPagesAsync<Client>(
+                // Offset, not checkpoint: Auth0 rejects checkpoint pagination on
+                // GET /api/v2/clients unless the request also carries a q parameter. Narrowing by q
+                // instead would be unsafe here — application names are not unique in Auth0, so a
+                // search miss returns no match and we would silently create a duplicate app.
+                var list = await Auth0Paging.GetAllOffsetPagesAsync<Client>(
                     pagination => api.Clients.GetAllAsync(new GetClientsRequest() { Fields = "client_id,name" }, pagination, cancellationToken),
                     cancellationToken);
                 var self = list.FirstOrDefault(i => i.Name == conf.Name);

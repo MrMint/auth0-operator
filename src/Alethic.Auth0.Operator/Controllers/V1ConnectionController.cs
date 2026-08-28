@@ -197,8 +197,11 @@ namespace Alethic.Auth0.Operator.Controllers
 
                 // Allow-list only the fields we read (id, name). Do not name enabled_clients
                 // — referencing it at all on GET /api/v2/connections trips deprecation detection.
-                var list = await Auth0Paging.GetAllCheckpointPagesAsync<Connection>(
-                    pagination => api.Connections.GetAllAsync(new GetConnectionsRequest { Fields = "id,name", IncludeFields = true }, pagination, cancellationToken),
+                // Offset, not checkpoint: Auth0 rejects checkpoint pagination on
+                // GET /api/v2/connections unless the request also carries a q parameter. Connection
+                // names are unique per tenant, so filtering on name server-side is exact.
+                var list = await Auth0Paging.GetAllOffsetPagesAsync<Connection>(
+                    pagination => api.Connections.GetAllAsync(new GetConnectionsRequest { Name = conf.Name, Fields = "id,name", IncludeFields = true }, pagination, cancellationToken),
                     cancellationToken);
                 var self = list.FirstOrDefault(i => i.Name == conf.Name);
                 if (self is not null)

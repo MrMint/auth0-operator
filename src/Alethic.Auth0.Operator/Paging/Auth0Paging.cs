@@ -29,7 +29,9 @@ namespace Alethic.Auth0.Operator.Paging
         /// </summary>
         /// <remarks>
         /// Preferred over <see cref="GetAllOffsetPagesAsync"/> where the endpoint supports it, since
-        /// Auth0 has capped how far offset pagination can reach.
+        /// Auth0 has capped how far offset pagination can reach. Confirm the endpoint first: some,
+        /// including GET /api/v2/clients and GET /api/v2/connections, reject checkpoint pagination
+        /// outright unless the request also carries a q parameter.
         /// </remarks>
         /// <typeparam name="T"></typeparam>
         /// <param name="getPage">Requests a single page for the supplied checkpoint.</param>

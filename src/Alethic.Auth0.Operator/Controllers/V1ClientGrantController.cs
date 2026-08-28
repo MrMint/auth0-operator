@@ -7,6 +7,8 @@ using System.Threading.Tasks;
 using Alethic.Auth0.Operator.Core.Models.ClientGrant;
 using Alethic.Auth0.Operator.Models;
 using Alethic.Auth0.Operator.Options;
+using Alethic.Auth0.Operator.Paging;
+using Alethic.Auth0.Operator.RateLimiting;
 
 using Auth0.ManagementApi;
 using Auth0.ManagementApi.Models;
@@ -43,8 +45,20 @@ namespace Alethic.Auth0.Operator.Controllers
         /// <param name="cache"></param>
         /// <param name="logger"></param>
         /// <param name="options"></param>
-        public V1ClientGrantController(IKubernetesClient kube, EntityRequeue<V1ClientGrant> requeue, IMemoryCache cache, ILogger<V1ClientGrantController> logger, IOptions<OperatorOptions> options) :
-            base(kube, requeue, cache, logger, options)
+        /// <param name="clientFactory"></param>
+        /// <param name="rateLimiterService"></param>
+        /// <param name="reconciliationScheduler"></param>
+        public V1ClientGrantController(
+            IKubernetesClient kube,
+            EntityRequeue<V1ClientGrant> requeue,
+            IMemoryCache cache,
+            ILogger<V1ClientGrantController> logger,
+            IOptions<OperatorOptions> options,
+            IManagementApiClientFactory clientFactory,
+            IRateLimiterService rateLimiterService,
+            IReconciliationScheduler reconciliationScheduler
+        )
+            : base(kube, requeue, cache, logger, options, clientFactory, rateLimiterService, reconciliationScheduler)
         {
 
         }
@@ -55,7 +69,10 @@ namespace Alethic.Auth0.Operator.Controllers
         /// <inheritdoc />
         protected override async Task<Hashtable?> Get(IManagementApiClient api, string id, string defaultNamespace, CancellationToken cancellationToken)
         {
-            var list = await api.ClientGrants.GetAllAsync(new GetClientGrantsRequest(), cancellationToken: cancellationToken);
+            // Auth0 has no GET /client-grants/{id}, so the grant has to be located in the list.
+            var list = await Auth0Paging.GetAllOffsetPagesAsync<ClientGrant>(
+                pagination => api.ClientGrants.GetAllAsync(new GetClientGrantsRequest(), pagination, cancellationToken),
+                cancellationToken);
             var self = list.FirstOrDefault(i => i.Id == id);
             if (self == null)
                 return null;
@@ -84,7 +101,9 @@ namespace Alethic.Auth0.Operator.Controllers
             if (string.IsNullOrWhiteSpace(audience))
                 throw new InvalidOperationException();
 
-            var list = await api.ClientGrants.GetAllAsync(new GetClientGrantsRequest() { ClientId = clientId }, null!, cancellationToken);
+            var list = await Auth0Paging.GetAllOffsetPagesAsync<ClientGrant>(
+                pagination => api.ClientGrants.GetAllAsync(new GetClientGrantsRequest() { ClientId = clientId }, pagination, cancellationToken),
+                cancellationToken);
             return list.Where(i => i.ClientId == clientId && i.Audience == audience).Select(i => i.Id).FirstOrDefault();
         }
 

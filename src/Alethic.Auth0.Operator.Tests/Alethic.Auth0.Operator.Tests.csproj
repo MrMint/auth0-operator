@@ -10,10 +10,13 @@
     <ItemGroup>
         <PackageReference Include="Auth0.AuthenticationApi" Version="7.40.0" />
         <PackageReference Include="Auth0.ManagementApi" Version="7.40.0" />
+        <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="9.0.0" />
+        <PackageReference Include="Moq" Version="4.20.72" />
         <PackageReference Include="System.Text.Json" Version="9.0.0" />
     </ItemGroup>
 
     <ItemGroup>
+      <ProjectReference Include="..\Alethic.Auth0.Operator\Alethic.Auth0.Operator.csproj" />
       <ProjectReference Include="..\Alethic.Auth0.Operator.Core\Alethic.Auth0.Operator.Core.csproj" />
     </ItemGroup>
 

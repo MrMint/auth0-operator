@@ -32,6 +32,15 @@ rules:
   verbs:
   - '*'
 - apiGroups:
+  - kubernetes.auth0.com
+  resources:
+  - auth0roles
+  - rolepermissions
+  - logstreams
+  - eventstreams
+  verbs:
+  - '*'
+- apiGroups:
   - ""
   resources:
   - events
@@ -82,6 +91,38 @@ rules:
   - kubernetes.auth0.com
   resources:
   - connections/status
+  verbs:
+  - get
+  - update
+  - patch
+- apiGroups:
+  - kubernetes.auth0.com
+  resources:
+  - auth0roles/status
+  verbs:
+  - get
+  - update
+  - patch
+- apiGroups:
+  - kubernetes.auth0.com
+  resources:
+  - rolepermissions/status
+  verbs:
+  - get
+  - update
+  - patch
+- apiGroups:
+  - kubernetes.auth0.com
+  resources:
+  - logstreams/status
+  verbs:
+  - get
+  - update
+  - patch
+- apiGroups:
+  - kubernetes.auth0.com
+  resources:
+  - eventstreams/status
   verbs:
   - get
   - update

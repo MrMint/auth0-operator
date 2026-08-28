@@ -7,6 +7,7 @@ rules:
   - kubernetes.auth0.com
   resources:
   - tenants
+  - auth0roles
   - clients
   - resourceservers
   verbs:
@@ -26,8 +27,16 @@ rules:
 - apiGroups:
   - kubernetes.auth0.com
   resources:
-  - clientgrants
   - connections
+  verbs:
+  - '*'
+- apiGroups:
+  - kubernetes.auth0.com
+  resources:
+  - clientgrants
+  - eventstreams
+  - logstreams
+  - rolepermissions
   verbs:
   - '*'
 - apiGroups:
@@ -44,7 +53,13 @@ rules:
   resources:
   - leases
   verbs:
-  - '*'
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
 - apiGroups:
   - kubernetes.auth0.com
   resources:
@@ -56,7 +71,23 @@ rules:
 - apiGroups:
   - kubernetes.auth0.com
   resources:
+  - auth0roles/status
+  verbs:
+  - get
+  - update
+  - patch
+- apiGroups:
+  - kubernetes.auth0.com
+  resources:
   - clients/status
+  verbs:
+  - get
+  - update
+  - patch
+- apiGroups:
+  - kubernetes.auth0.com
+  resources:
+  - connections/status
   verbs:
   - get
   - update
@@ -80,7 +111,23 @@ rules:
 - apiGroups:
   - kubernetes.auth0.com
   resources:
-  - connections/status
+  - eventstreams/status
+  verbs:
+  - get
+  - update
+  - patch
+- apiGroups:
+  - kubernetes.auth0.com
+  resources:
+  - logstreams/status
+  verbs:
+  - get
+  - update
+  - patch
+- apiGroups:
+  - kubernetes.auth0.com
+  resources:
+  - rolepermissions/status
   verbs:
   - get
   - update

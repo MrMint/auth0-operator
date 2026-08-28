@@ -5,6 +5,8 @@ using System.Threading.Tasks;
 
 using Alethic.Auth0.Operator.Core.Models.Tenant;
 using Alethic.Auth0.Operator.Models;
+using Alethic.Auth0.Operator.Options;
+using Alethic.Auth0.Operator.RateLimiting;
 
 using Auth0.ManagementApi.Models;
 
@@ -17,6 +19,7 @@ using KubeOps.KubernetesClient;
 
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Alethic.Auth0.Operator.Controllers
 {
@@ -36,8 +39,10 @@ namespace Alethic.Auth0.Operator.Controllers
         /// <param name="requeue"></param>
         /// <param name="cache"></param>
         /// <param name="logger"></param>
-        public V1TenantController(IKubernetesClient kube, EntityRequeue<V1Tenant> requeue, IMemoryCache cache, ILogger<V1TenantController> logger) :
-            base(kube, requeue, cache, logger)
+        /// <param name="clientFactory"></param>
+        /// <param name="options"></param>
+        public V1TenantController(IKubernetesClient kube, EntityRequeue<V1Tenant> requeue, IMemoryCache cache, ILogger<V1TenantController> logger, IManagementApiClientFactory clientFactory, IOptions<OperatorOptions> options) :
+            base(kube, requeue, cache, logger, clientFactory, options)
         {
 
         }
@@ -46,7 +51,7 @@ namespace Alethic.Auth0.Operator.Controllers
         protected override string EntityTypeName => "Tenant";
 
         /// <inheritdoc />
-        protected override async Task Reconcile(V1Tenant entity, CancellationToken cancellationToken)
+        protected override async Task<bool> Reconcile(V1Tenant entity, CancellationToken cancellationToken)
         {
             var api = await GetTenantApiClientAsync(entity, cancellationToken);
             if (api == null)
@@ -63,18 +68,17 @@ namespace Alethic.Auth0.Operator.Controllers
                 if (conf.Flags != null && conf.Flags.EnableSSO != null && settings.Flags.EnableSSO != null && conf.Flags.EnableSSO != settings.Flags.EnableSSO)
                     throw new InvalidOperationException($"{EntityTypeName} {entity.Namespace()}/{entity.Name()}: updating the enable_sso flag is not allowed.");
 
-                // push update to Auth0
+                // push update to Auth0 - UpdateAsync returns the updated settings
                 var req = TransformToNewtonsoftJson<TenantConf, TenantSettingsUpdateRequest>(conf);
                 req.Flags.EnableSSO = null;
                 settings = await api.TenantSettings.UpdateAsync(req, cancellationToken);
             }
 
-            // retrieve and copy applied settings to status
-            settings = await api.TenantSettings.GetAsync(cancellationToken: cancellationToken);
+            // Use settings from update response (or initial fetch if no update) - no need to re-fetch
             entity.Status.LastConf = TransformToSystemTextJson<Hashtable>(settings);
             entity = await Kube.UpdateStatusAsync(entity, cancellationToken);
 
-            await ReconcileSuccessAsync(entity, cancellationToken);
+            return true; // Reconciliation completed successfully
         }
 
         /// <inheritdoc />

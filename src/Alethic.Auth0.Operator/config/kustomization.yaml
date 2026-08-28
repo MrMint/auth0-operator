@@ -1,16 +1,22 @@
-namespace: alethic.auth0.operator-system
-namePrefix: alethic.auth0.operator-
-commonLabels:
-  operator: alethic.auth0.operator
+namespace: Alethic.Auth0.Operator.csproj-system
+namePrefix: Alethic.Auth0.Operator.csproj-
+labels:
+- includeSelectors: true
+  pairs:
+    operator: Alethic.Auth0.Operator.csproj
 resources:
 - operator-role.yaml
 - operator-role-binding.yaml
 - deployment.yaml
-- clients_kubernetes_auth0_com.yaml
-- clientgrants_kubernetes_auth0_com.yaml
-- connections_kubernetes_auth0_com.yaml
-- resourceservers_kubernetes_auth0_com.yaml
-- tenants_kubernetes_auth0_com.yaml
+- ../../../charts/auth0-operator/crds/auth0roles_kubernetes_auth0_com.yaml
+- ../../../charts/auth0-operator/crds/clients_kubernetes_auth0_com.yaml
+- ../../../charts/auth0-operator/crds/clientgrants_kubernetes_auth0_com.yaml
+- ../../../charts/auth0-operator/crds/connections_kubernetes_auth0_com.yaml
+- ../../../charts/auth0-operator/crds/eventstreams_kubernetes_auth0_com.yaml
+- ../../../charts/auth0-operator/crds/logstreams_kubernetes_auth0_com.yaml
+- ../../../charts/auth0-operator/crds/resourceservers_kubernetes_auth0_com.yaml
+- ../../../charts/auth0-operator/crds/rolepermissions_kubernetes_auth0_com.yaml
+- ../../../charts/auth0-operator/crds/tenants_kubernetes_auth0_com.yaml
 - namespace.yaml
 images:
 - name: operator

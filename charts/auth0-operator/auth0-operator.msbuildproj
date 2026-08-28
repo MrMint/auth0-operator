@@ -5,15 +5,31 @@
     <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
     <ChartName>auth0-operator</ChartName>
     <ChartPackage>$(ChartName)-$(Version).tgz</ChartPackage>
+    <CrdBundleName>auth0-operator.crds.yaml</CrdBundleName>
   </PropertyGroup>
   <ItemGroup>
     <ChartItem Include="templates\**\*" TargetPath="templates\%(RecursiveDir)%(Filename)%(Extension)" />
     <ChartItem Include="*.yaml" TargetPath="%(Filename)%(Extension)" />
-    <ChartItem Include="..\..\src\Alethic.Auth0.Operator\config\*_kubernetes_auth0_com.yaml" TargetPath="crds\%(Filename)%(Extension)" />
+    <ChartItem Include="values.schema.json" TargetPath="values.schema.json" />
+    <!-- CRDs go to Helm's special crds/ directory (not templates/) so helm template excludes them by default -->
+    <ChartItem Include="crds\*_kubernetes_auth0_com.yaml" TargetPath="crds\%(Filename)%(Extension)" />
+    <CrdFile Include="crds\*_kubernetes_auth0_com.yaml" />
   </ItemGroup>
   <ItemGroup>
     <Folder Include="templates\" />
   </ItemGroup>
+  <!-- Generate combined CRD bundle for cdk8s/external tooling -->
+  <Target Name="GenerateCrdBundle" BeforeTargets="PackageHelm" Inputs="@(CrdFile)" Outputs="$(IntermediateOutputPath)$(CrdBundleName)">
+    <!-- Call script to generate properly formatted CRD bundle -->
+    <Exec Command="bash generate-crd-bundle.sh $(IntermediateOutputPath)$(CrdBundleName)" WorkingDirectory="$(MSBuildProjectDirectory)" />
+    <ItemGroup>
+      <None Include="$(IntermediateOutputPath)$(CrdBundleName)">
+        <TargetPath>$(CrdBundleName)</TargetPath>
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      </None>
+      <FileWrites Include="$(IntermediateOutputPath)$(CrdBundleName)" />
+    </ItemGroup>
+  </Target>
   <Target Name="PackageHelm" BeforeTargets="BeforeBuild" Inputs="@(ChartItem)" Outputs="$(IntermediateOutputPath)$(ChartPackage)">
     <RemoveDir Directories="$(IntermediateOutputPath)chart" />
     <Copy SourceFiles="@(ChartItem)" DestinationFiles="@(ChartItem->'$(IntermediateOutputPath)chart\%(TargetPath)')" />

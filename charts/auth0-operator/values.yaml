@@ -1,3 +1,29 @@
+# CRD Management
+# ==============
+# CRDs are located in the chart's crds/ directory and are managed by Helm.
+#
+# Helm Behavior:
+# - helm install: CRDs are installed automatically (use --skip-crds to skip)
+# - helm template: CRDs are NOT included by default (use --include-crds to include)
+#
+# This means cdk8s and other tools using "helm template" will NOT get CRDs
+# by default, preventing duplication when CRDs are managed externally.
+#
+# To include CRDs in helm template output:
+#   helm template auth0-operator oci://ghcr.io/mrmint/auth0-operator --include-crds
+#
+# To skip CRDs during helm install:
+#   helm install auth0-operator oci://ghcr.io/mrmint/auth0-operator --skip-crds
+#
+# External CRD Management (recommended for GitOps/ArgoCD):
+# Use the static CRD bundle from releases:
+#   https://github.com/MrMint/auth0-operator/releases/download/<version>/auth0-operator.crds.yaml
+#
+# This allows you to:
+# - Control CRD deployment timing with ArgoCD sync waves
+# - Manage CRD lifecycle independently from the operator
+# - Avoid CRD duplication warnings
+
 operator:
   env: []
 
@@ -8,8 +34,9 @@ operator:
   additionalLabels: {}
 
   # Specify the Operator container image to use for the deployment.
+  # NOTE: This fork uses ghcr.io/mrmint/... instead of upstream's ghcr.io/alethic/...
   image:
-    repository: ghcr.io/alethic/auth0-operator-image
+    repository: ghcr.io/mrmint/auth0-operator-image
     pullPolicy: IfNotPresent
 
   # An array of Kubernetes secrets to use for pulling images from a private ``image.repository``.
@@ -79,8 +106,56 @@ operator:
 
 # Various configuration options.
 options:
-    # Limit operation to the single specified namespace. This can be used to install a namespace-specific instance of the operator.
-    # NOT YET SUPORTED
-    #namespace:
+  # Limit operation to the single specified namespace. This can be used to install a namespace-specific instance of the operator.
+  # NOT YET SUPPORTED
+  # namespace: "my-namespace"
+
+  # Reconciliation behavior options
   reconciliation:
-    interval:
+    # Base interval between periodic reconciliation cycles for drift detection.
+    # CRD changes are still reconciled immediately via watch events.
+    # Default: 10m
+    # interval: "10m"
+    
+    # Enable jitter to spread reconciliations across time.
+    # When enabled, each entity gets a deterministic offset based on its name.
+    enableJitter: true
+    
+    # Maximum jitter to add to reconciliation interval.
+    # Entities will be spread across [0, MaxJitter) window.
+    # Default: 5m
+    # maxJitter: "5m"
+    
+    # Enable spreading initial reconciliations when operator starts.
+    # This prevents a thundering herd on operator startup.
+    enableStartupSpread: true
+    
+    # Window over which to spread initial reconciliations on startup.
+    # Default: 2m
+    # startupSpreadWindow: "2m"
+    
+    # Minimum interval between reconciliations when rate limited.
+    # Default: 5m
+    # minThrottledInterval: "5m"
+
+  # Rate limiting options for Auth0 API calls
+  # Based on Auth0 Self Service Management API limits (25-200 requests/minute per endpoint)
+  rateLimit:
+    # Enable proactive throttling based on X-RateLimit headers.
+    # When enabled, the operator will slow down when approaching rate limits.
+    enableProactiveThrottling: true
+    
+    # Reconciliation interval when approaching rate limits (seconds).
+    throttledReconciliationIntervalSeconds: 300
+    
+    # Minimum delay after hitting rate limit (seconds).
+    minRateLimitDelaySeconds: 60
+    
+    # Default tier assumption for new tenants (SelfService or Enterprise).
+    # Affects initial rate limit estimates before first API response.
+    defaultTier: "SelfService"
+    
+    # Target requests per minute for pacing.
+    # Auth0 Self Service allows 25-200 requests/minute per endpoint.
+    # Conservative default to stay well under limits.
+    targetRequestsPerMinute: 30

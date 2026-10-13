@@ -78,6 +78,7 @@ Since the entire API is derived from the Auth0 Management API their documentatio
 - [x] kubernetes.auth0.com/v1:RolePermission `a0rp`
 - [x] kubernetes.auth0.com/v1:LogStream `a0ls`
 - [x] kubernetes.auth0.com/v1:EventStream `a0es` *(Beta - Auth0 Early Access API)*
+- [x] kubernetes.auth0.com/v1:EmailProvider `a0email`
 
 ## Examples
 
@@ -412,4 +413,86 @@ spec:
       eventBridge:
         awsAccountId: "123456789012"
         awsRegion: us-east-1
+```
+
+### EmailProvider
+
+Configures the tenant's email provider (`/api/v2/emails/provider`).
+
+https://auth0.com/docs/customize/email/smtp-email-providers
+
+A tenant has a single email provider, so only one `EmailProvider` resource may target a given tenant. If more than one does, the oldest one is reconciled and the others are ignored with a `DuplicateEmailProvider` warning event. They make no Auth0 calls.
+
+`spec.conf.name` accepts any provider name Auth0 supports (for example `ses`, `smtp`, `sendgrid`, `mailgun`, `mandrill`, `sparkpost`, `azure_cs`, `ms365` or `custom`). `spec.conf.settings` is passed to Auth0 unchanged.
+
+Each field under `spec.conf.credentials` takes either a literal `value` or a `secretKeyRef` (`name` and `key`) that points to a Secret in the resource's namespace. Supported fields are `api_user`, `api_key`, `accessKeyId`, `secretAccessKey`, `region`, `domain`, `smtp_host`, `smtp_port`, `smtp_user`, `smtp_pass`, `connectionString`, `tenantId`, `clientId` and `clientSecret`. Use the ones your provider needs.
+
+- Auth0 never returns credentials, so every update sends the resolved credentials again. A rotated Secret reaches Auth0 on the next periodic reconcile.
+- If a referenced Secret or key is missing or empty, the operator makes no Auth0 calls and retries later.
+- Status never contains credentials.
+- The default policy is `Create` and `Update`, so deleting the resource leaves the email provider configured in Auth0. Add `Delete` to the policy to remove it as well.
+
+#### Amazon SES Example
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: email-provider-credentials
+  namespace: example
+stringData:
+  accessKeyId: EXAMPLEACCESSKEYID
+  secretAccessKey: example-secret-access-key
+---
+apiVersion: kubernetes.auth0.com/v1
+kind: EmailProvider
+metadata:
+  name: email-provider
+  namespace: example
+spec:
+  tenantRef:
+    name: example-tenant
+  conf:
+    name: ses
+    enabled: true
+    default_from_address: no-reply@example.com
+    credentials:
+      accessKeyId:
+        secretKeyRef:
+          name: email-provider-credentials
+          key: accessKeyId
+      secretAccessKey:
+        secretKeyRef:
+          name: email-provider-credentials
+          key: secretAccessKey
+      region:
+        value: us-east-1
+```
+
+#### SMTP Example
+
+```yaml
+apiVersion: kubernetes.auth0.com/v1
+kind: EmailProvider
+metadata:
+  name: email-provider
+  namespace: example
+spec:
+  tenantRef:
+    name: example-tenant
+  conf:
+    name: smtp
+    enabled: true
+    default_from_address: no-reply@example.com
+    credentials:
+      smtp_host:
+        value: smtp.example.com
+      smtp_port:
+        value: "587"
+      smtp_user:
+        value: example-user
+      smtp_pass:
+        secretKeyRef:
+          name: email-provider-credentials
+          key: smtp_pass
 ```

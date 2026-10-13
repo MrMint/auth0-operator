@@ -38,6 +38,7 @@ rules:
   - rolepermissions
   - logstreams
   - eventstreams
+  - emailproviders
   verbs:
   - '*'
 - apiGroups:
@@ -123,6 +124,14 @@ rules:
   - kubernetes.auth0.com
   resources:
   - eventstreams/status
+  verbs:
+  - get
+  - update
+  - patch
+- apiGroups:
+  - kubernetes.auth0.com
+  resources:
+  - emailproviders/status
   verbs:
   - get
   - update

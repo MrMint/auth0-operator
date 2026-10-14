@@ -39,9 +39,11 @@ namespace Alethic.Auth0.Operator.Core.Models.Connection
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         public string[]? Realms { get; set; }
 
-        [JsonPropertyName("enabled_clients")]
-        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public V1ClientReference[]? EnabledClients { get; set; }
+        // Note: enabled_clients is intentionally NOT exposed here.
+        // It is computed dynamically by the Connection controller via aggregation
+        // from all Client CRDs that reference this connection in their enabledConnections.
+        // This prevents race conditions where both Client and Connection controllers
+        // try to manage the same Auth0 state.
 
         [JsonPropertyName("show_as_button")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

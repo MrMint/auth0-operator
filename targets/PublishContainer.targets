@@ -1,7 +1,9 @@
 <Project>
 
     <PropertyGroup>
-        <ContainerArchiveOutputPath Condition=" '$(ContainerArchiveOutputPath)' == '' ">$(OutputPath)\container\$(ContainerRepository.Replace('/', '-')).tar</ContainerArchiveOutputPath>
+        <!-- Include RuntimeIdentifier in the tar filename for multi-arch builds -->
+        <_ContainerArchiveSuffix Condition=" '$(RuntimeIdentifier)' != '' ">-$(RuntimeIdentifier)</_ContainerArchiveSuffix>
+        <ContainerArchiveOutputPath Condition=" '$(ContainerArchiveOutputPath)' == '' ">$(OutputPath)\container\$(ContainerRepository.Replace('/', '-'))$(_ContainerArchiveSuffix).tar</ContainerArchiveOutputPath>
     </PropertyGroup>
 
     <Import Project="PublishContainerProjectReferences.targets" />

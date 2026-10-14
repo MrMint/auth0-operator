@@ -8,6 +8,8 @@ using System.Threading.Tasks;
 using Alethic.Auth0.Operator.Core.Models.ResourceServer;
 using Alethic.Auth0.Operator.Models;
 using Alethic.Auth0.Operator.Options;
+using Alethic.Auth0.Operator.Paging;
+using Alethic.Auth0.Operator.RateLimiting;
 
 using Auth0.Core.Exceptions;
 using Auth0.ManagementApi;
@@ -44,8 +46,20 @@ namespace Alethic.Auth0.Operator.Controllers
         /// <param name="cache"></param>
         /// <param name="logger"></param>
         /// <param name="options"></param>
-        public V1ResourceServerController(IKubernetesClient kube, EntityRequeue<V1ResourceServer> requeue, IMemoryCache cache, ILogger<V1ResourceServerController> logger, IOptions<OperatorOptions> options) :
-            base(kube, requeue, cache, logger, options)
+        /// <param name="clientFactory"></param>
+        /// <param name="rateLimiterService"></param>
+        /// <param name="reconciliationScheduler"></param>
+        public V1ResourceServerController(
+            IKubernetesClient kube,
+            EntityRequeue<V1ResourceServer> requeue,
+            IMemoryCache cache,
+            ILogger<V1ResourceServerController> logger,
+            IOptions<OperatorOptions> options,
+            IManagementApiClientFactory clientFactory,
+            IRateLimiterService rateLimiterService,
+            IReconciliationScheduler reconciliationScheduler
+        )
+            : base(kube, requeue, cache, logger, options, clientFactory, rateLimiterService, reconciliationScheduler)
         {
 
         }
@@ -73,7 +87,9 @@ namespace Alethic.Auth0.Operator.Controllers
             if (conf is null)
                 return null;
 
-            var list = await api.ResourceServers.GetAllAsync(new ResourceServerGetRequest() { }, cancellationToken: cancellationToken);
+            var list = await Auth0Paging.GetAllOffsetPagesAsync<ResourceServer>(
+                pagination => api.ResourceServers.GetAllAsync(new ResourceServerGetRequest() { }, pagination, cancellationToken),
+                cancellationToken);
             var self = list.FirstOrDefault(i => i.Identifier == conf.Identifier);
             return self?.Id;
         }

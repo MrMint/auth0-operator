@@ -161,6 +161,10 @@ namespace Alethic.Auth0.Operator.Core.Models.Client
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         public bool? RequireProofOfPossession { get; set; }
 
+        [JsonPropertyName("enabled_connections")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public V1ConnectionReference[]? EnabledConnections { get; set; }
+
     }
 
 }

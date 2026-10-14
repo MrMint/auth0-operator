@@ -34,6 +34,7 @@ rules:
   - kubernetes.auth0.com
   resources:
   - clientgrants
+  - emailproviders
   - eventstreams
   - logstreams
   - rolepermissions
@@ -112,6 +113,14 @@ rules:
   - kubernetes.auth0.com
   resources:
   - eventstreams/status
+  verbs:
+  - get
+  - update
+  - patch
+- apiGroups:
+  - kubernetes.auth0.com
+  resources:
+  - emailproviders/status
   verbs:
   - get
   - update

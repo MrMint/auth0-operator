@@ -1,0 +1,579 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: emailproviders.kubernetes.auth0.com
+spec:
+  group: kubernetes.auth0.com
+  names:
+    kind: EmailProvider
+    listKind: EmailProviderList
+    plural: emailproviders
+    shortNames:
+    - a0email
+    singular: emailprovider
+  scope: Namespaced
+  versions:
+  - name: v1
+    schema:
+      openAPIV3Schema:
+        properties:
+          status:
+            properties:
+              id:
+                nullable: true
+                type: string
+              lastConf:
+                nullable: true
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
+            type: object
+          spec:
+            properties:
+              policy:
+                items:
+                  enum:
+                  - Create
+                  - Update
+                  - Delete
+                  type: string
+                nullable: true
+                type: array
+              tenantRef:
+                nullable: true
+                properties:
+                  namespace:
+                    nullable: true
+                    type: string
+                  name:
+                    nullable: true
+                    type: string
+                required:
+                - name
+                type: object
+              init:
+                nullable: true
+                properties:
+                  name:
+                    nullable: true
+                    type: string
+                  enabled:
+                    nullable: true
+                    type: boolean
+                  default_from_address:
+                    nullable: true
+                    type: string
+                  credentials:
+                    nullable: true
+                    properties:
+                      api_user:
+                        nullable: true
+                        properties:
+                          value:
+                            nullable: true
+                            type: string
+                          secretKeyRef:
+                            nullable: true
+                            properties:
+                              name:
+                                nullable: true
+                                type: string
+                              key:
+                                nullable: true
+                                type: string
+                            type: object
+                        type: object
+                      api_key:
+                        nullable: true
+                        properties:
+                          value:
+                            nullable: true
+                            type: string
+                          secretKeyRef:
+                            nullable: true
+                            properties:
+                              name:
+                                nullable: true
+                                type: string
+                              key:
+                                nullable: true
+                                type: string
+                            type: object
+                        type: object
+                      accessKeyId:
+                        nullable: true
+                        properties:
+                          value:
+                            nullable: true
+                            type: string
+                          secretKeyRef:
+                            nullable: true
+                            properties:
+                              name:
+                                nullable: true
+                                type: string
+                              key:
+                                nullable: true
+                                type: string
+                            type: object
+                        type: object
+                      secretAccessKey:
+                        nullable: true
+                        properties:
+                          value:
+                            nullable: true
+                            type: string
+                          secretKeyRef:
+                            nullable: true
+                            properties:
+                              name:
+                                nullable: true
+                                type: string
+                              key:
+                                nullable: true
+                                type: string
+                            type: object
+                        type: object
+                      region:
+                        nullable: true
+                        properties:
+                          value:
+                            nullable: true
+                            type: string
+                          secretKeyRef:
+                            nullable: true
+                            properties:
+                              name:
+                                nullable: true
+                                type: string
+                              key:
+                                nullable: true
+                                type: string
+                            type: object
+                        type: object
+                      domain:
+                        nullable: true
+                        properties:
+                          value:
+                            nullable: true
+                            type: string
+                          secretKeyRef:
+                            nullable: true
+                            properties:
+                              name:
+                                nullable: true
+                                type: string
+                              key:
+                                nullable: true
+                                type: string
+                            type: object
+                        type: object
+                      smtp_host:
+                        nullable: true
+                        properties:
+                          value:
+                            nullable: true
+                            type: string
+                          secretKeyRef:
+                            nullable: true
+                            properties:
+                              name:
+                                nullable: true
+                                type: string
+                              key:
+                                nullable: true
+                                type: string
+                            type: object
+                        type: object
+                      smtp_port:
+                        nullable: true
+                        properties:
+                          value:
+                            nullable: true
+                            type: string
+                          secretKeyRef:
+                            nullable: true
+                            properties:
+                              name:
+                                nullable: true
+                                type: string
+                              key:
+                                nullable: true
+                                type: string
+                            type: object
+                        type: object
+                      smtp_user:
+                        nullable: true
+                        properties:
+                          value:
+                            nullable: true
+                            type: string
+                          secretKeyRef:
+                            nullable: true
+                            properties:
+                              name:
+                                nullable: true
+                                type: string
+                              key:
+                                nullable: true
+                                type: string
+                            type: object
+                        type: object
+                      smtp_pass:
+                        nullable: true
+                        properties:
+                          value:
+                            nullable: true
+                            type: string
+                          secretKeyRef:
+                            nullable: true
+                            properties:
+                              name:
+                                nullable: true
+                                type: string
+                              key:
+                                nullable: true
+                                type: string
+                            type: object
+                        type: object
+                      connectionString:
+                        nullable: true
+                        properties:
+                          value:
+                            nullable: true
+                            type: string
+                          secretKeyRef:
+                            nullable: true
+                            properties:
+                              name:
+                                nullable: true
+                                type: string
+                              key:
+                                nullable: true
+                                type: string
+                            type: object
+                        type: object
+                      tenantId:
+                        nullable: true
+                        properties:
+                          value:
+                            nullable: true
+                            type: string
+                          secretKeyRef:
+                            nullable: true
+                            properties:
+                              name:
+                                nullable: true
+                                type: string
+                              key:
+                                nullable: true
+                                type: string
+                            type: object
+                        type: object
+                      clientId:
+                        nullable: true
+                        properties:
+                          value:
+                            nullable: true
+                            type: string
+                          secretKeyRef:
+                            nullable: true
+                            properties:
+                              name:
+                                nullable: true
+                                type: string
+                              key:
+                                nullable: true
+                                type: string
+                            type: object
+                        type: object
+                      clientSecret:
+                        nullable: true
+                        properties:
+                          value:
+                            nullable: true
+                            type: string
+                          secretKeyRef:
+                            nullable: true
+                            properties:
+                              name:
+                                nullable: true
+                                type: string
+                              key:
+                                nullable: true
+                                type: string
+                            type: object
+                        type: object
+                    type: object
+                  settings:
+                    nullable: true
+                    type: object
+                    x-kubernetes-preserve-unknown-fields: true
+                type: object
+              conf:
+                nullable: true
+                properties:
+                  name:
+                    nullable: true
+                    type: string
+                  enabled:
+                    nullable: true
+                    type: boolean
+                  default_from_address:
+                    nullable: true
+                    type: string
+                  credentials:
+                    nullable: true
+                    properties:
+                      api_user:
+                        nullable: true
+                        properties:
+                          value:
+                            nullable: true
+                            type: string
+                          secretKeyRef:
+                            nullable: true
+                            properties:
+                              name:
+                                nullable: true
+                                type: string
+                              key:
+                                nullable: true
+                                type: string
+                            type: object
+                        type: object
+                      api_key:
+                        nullable: true
+                        properties:
+                          value:
+                            nullable: true
+                            type: string
+                          secretKeyRef:
+                            nullable: true
+                            properties:
+                              name:
+                                nullable: true
+                                type: string
+                              key:
+                                nullable: true
+                                type: string
+                            type: object
+                        type: object
+                      accessKeyId:
+                        nullable: true
+                        properties:
+                          value:
+                            nullable: true
+                            type: string
+                          secretKeyRef:
+                            nullable: true
+                            properties:
+                              name:
+                                nullable: true
+                                type: string
+                              key:
+                                nullable: true
+                                type: string
+                            type: object
+                        type: object
+                      secretAccessKey:
+                        nullable: true
+                        properties:
+                          value:
+                            nullable: true
+                            type: string
+                          secretKeyRef:
+                            nullable: true
+                            properties:
+                              name:
+                                nullable: true
+                                type: string
+                              key:
+                                nullable: true
+                                type: string
+                            type: object
+                        type: object
+                      region:
+                        nullable: true
+                        properties:
+                          value:
+                            nullable: true
+                            type: string
+                          secretKeyRef:
+                            nullable: true
+                            properties:
+                              name:
+                                nullable: true
+                                type: string
+                              key:
+                                nullable: true
+                                type: string
+                            type: object
+                        type: object
+                      domain:
+                        nullable: true
+                        properties:
+                          value:
+                            nullable: true
+                            type: string
+                          secretKeyRef:
+                            nullable: true
+                            properties:
+                              name:
+                                nullable: true
+                                type: string
+                              key:
+                                nullable: true
+                                type: string
+                            type: object
+                        type: object
+                      smtp_host:
+                        nullable: true
+                        properties:
+                          value:
+                            nullable: true
+                            type: string
+                          secretKeyRef:
+                            nullable: true
+                            properties:
+                              name:
+                                nullable: true
+                                type: string
+                              key:
+                                nullable: true
+                                type: string
+                            type: object
+                        type: object
+                      smtp_port:
+                        nullable: true
+                        properties:
+                          value:
+                            nullable: true
+                            type: string
+                          secretKeyRef:
+                            nullable: true
+                            properties:
+                              name:
+                                nullable: true
+                                type: string
+                              key:
+                                nullable: true
+                                type: string
+                            type: object
+                        type: object
+                      smtp_user:
+                        nullable: true
+                        properties:
+                          value:
+                            nullable: true
+                            type: string
+                          secretKeyRef:
+                            nullable: true
+                            properties:
+                              name:
+                                nullable: true
+                                type: string
+                              key:
+                                nullable: true
+                                type: string
+                            type: object
+                        type: object
+                      smtp_pass:
+                        nullable: true
+                        properties:
+                          value:
+                            nullable: true
+                            type: string
+                          secretKeyRef:
+                            nullable: true
+                            properties:
+                              name:
+                                nullable: true
+                                type: string
+                              key:
+                                nullable: true
+                                type: string
+                            type: object
+                        type: object
+                      connectionString:
+                        nullable: true
+                        properties:
+                          value:
+                            nullable: true
+                            type: string
+                          secretKeyRef:
+                            nullable: true
+                            properties:
+                              name:
+                                nullable: true
+                                type: string
+                              key:
+                                nullable: true
+                                type: string
+                            type: object
+                        type: object
+                      tenantId:
+                        nullable: true
+                        properties:
+                          value:
+                            nullable: true
+                            type: string
+                          secretKeyRef:
+                            nullable: true
+                            properties:
+                              name:
+                                nullable: true
+                                type: string
+                              key:
+                                nullable: true
+                                type: string
+                            type: object
+                        type: object
+                      clientId:
+                        nullable: true
+                        properties:
+                          value:
+                            nullable: true
+                            type: string
+                          secretKeyRef:
+                            nullable: true
+                            properties:
+                              name:
+                                nullable: true
+                                type: string
+                              key:
+                                nullable: true
+                                type: string
+                            type: object
+                        type: object
+                      clientSecret:
+                        nullable: true
+                        properties:
+                          value:
+                            nullable: true
+                            type: string
+                          secretKeyRef:
+                            nullable: true
+                            properties:
+                              name:
+                                nullable: true
+                                type: string
+                              key:
+                                nullable: true
+                                type: string
+                            type: object
+                        type: object
+                    type: object
+                  settings:
+                    nullable: true
+                    type: object
+                    x-kubernetes-preserve-unknown-fields: true
+                type: object
+            required:
+            - tenantRef
+            - conf
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

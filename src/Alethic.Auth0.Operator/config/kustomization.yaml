@@ -12,6 +12,7 @@ resources:
 - ../../../charts/auth0-operator/crds/clients_kubernetes_auth0_com.yaml
 - ../../../charts/auth0-operator/crds/clientgrants_kubernetes_auth0_com.yaml
 - ../../../charts/auth0-operator/crds/connections_kubernetes_auth0_com.yaml
+- ../../../charts/auth0-operator/crds/emailproviders_kubernetes_auth0_com.yaml
 - ../../../charts/auth0-operator/crds/eventstreams_kubernetes_auth0_com.yaml
 - ../../../charts/auth0-operator/crds/logstreams_kubernetes_auth0_com.yaml
 - ../../../charts/auth0-operator/crds/resourceservers_kubernetes_auth0_com.yaml

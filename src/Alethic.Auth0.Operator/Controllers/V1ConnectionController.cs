@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Net;
 using System.Security.Cryptography;
@@ -36,6 +37,11 @@ using KubeOps.KubernetesClient;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+
+using Newtonsoft.Json.Linq;
+
+using DateParseHandling = Newtonsoft.Json.DateParseHandling;
+using JsonTextReader = Newtonsoft.Json.JsonTextReader;
 
 namespace Alethic.Auth0.Operator.Controllers
 {
@@ -227,14 +233,9 @@ namespace Alethic.Auth0.Operator.Controllers
             if (conf.Strategy is null)
                 throw new InvalidOperationException("Missing connection strategy.");
 
-            // calculate options, depends on strategy
-            var options = conf.Strategy == "auth0" ? (dynamic?)TransformToNewtonsoftJson<ConnectionOptions, global::Auth0.ManagementApi.Models.Connections.ConnectionOptions>(JsonSerializer.Deserialize<ConnectionOptions>(JsonSerializer.Serialize(conf.Options))) : conf.Options;
-            if (options is null)
-                throw new InvalidOperationException("Missing connection options.");
-
             // configure strategy and options
             req.Strategy = conf.Strategy;
-            req.Options = options;
+            req.Options = CreateOptions(conf.Strategy, conf.Options);
 
             // For new connections, aggregate enabled_clients from Client CRDs
             // Use CRD metadata name/namespace, not conf.Name (which is the Auth0 name)
@@ -295,9 +296,9 @@ namespace Alethic.Auth0.Operator.Controllers
             Logger.LogDebug("{EntityTypeName} aggregated {Count} enabled_clients for connection {ConnectionId}",
                 EntityTypeName, aggregatedClientIds.Length, id);
 
-            // calculate options: depends on current strategy, possibly null, which means no apply
+            // null means the spec sets no options, which leaves them as they are
             var strategy = last?["strategy"] as string ?? conf.Strategy;
-            var options = strategy == "auth0" && conf.Options is not null ? (dynamic?)TransformToNewtonsoftJson<ConnectionOptions, global::Auth0.ManagementApi.Models.Connections.ConnectionOptions>(JsonSerializer.Deserialize<ConnectionOptions>(JsonSerializer.Serialize(conf.Options))) : conf.Options;
+            var options = MergeOptions(strategy, last?["options"] as Hashtable, conf.Options);
             if (options is not null)
                 req.Options = options;
 
@@ -309,6 +310,67 @@ namespace Alethic.Auth0.Operator.Controllers
             await SyncEnabledClientsAsync(api, id, aggregatedClientIds, currentEnabledClients, cancellationToken);
 
             Logger.LogInformation("{EntityTypeName} successfully updated connection in Auth0 with ID: {ConnectionId}, name: {ConnectionName} and strategy: {Strategy}", EntityTypeName, id, conf.Name, conf.Strategy);
+        }
+
+        /// <summary>
+        /// The options to send on update, or null to leave them as they are. Auth0 replaces the
+        /// whole options object on PATCH, so the spec's top-level keys are laid over the live
+        /// options. A setting the spec doesn't name keeps its live value, including settings the
+        /// typed <see cref="ConnectionOptions"/> doesn't model, such as <c>disable_signup</c>.
+        /// A key removed from the spec is left in place, not deleted.
+        /// </summary>
+        static JObject? MergeOptions(string? strategy, Hashtable? live, Hashtable? spec)
+        {
+            if (spec is null)
+                return null;
+
+            if (strategy == "auth0")
+                ValidateDatabaseOptions(spec);
+
+            var merged = live is null ? new Hashtable() : new Hashtable(live);
+            foreach (DictionaryEntry entry in spec)
+                merged[entry.Key] = entry.Value;
+
+            return ToJObject(merged);
+        }
+
+        /// <summary>
+        /// The options to send on create, as written, so an option the typed
+        /// <see cref="ConnectionOptions"/> doesn't model, such as <c>disable_signup</c>, is set
+        /// from the first create.
+        /// </summary>
+        static JObject CreateOptions(string strategy, Hashtable? options)
+        {
+            if (options is null)
+                throw new InvalidOperationException("Missing connection options.");
+
+            if (strategy == "auth0")
+                ValidateDatabaseOptions(options);
+
+            return ToJObject(options);
+        }
+
+        /// <summary>
+        /// Fails the reconcile when a database connection's options don't fit the typed model.
+        /// The typed model only checks them: converting through it would drop every field it
+        /// doesn't model.
+        /// </summary>
+        static void ValidateDatabaseOptions(Hashtable options)
+        {
+            JsonSerializer.Deserialize<ConnectionOptions>(JsonSerializer.Serialize(options));
+        }
+
+        /// <summary>
+        /// The options as the JSON object the Management API client sends. Date parsing is off,
+        /// so a date-like string goes back to Auth0 unchanged.
+        /// </summary>
+        static JObject ToJObject(Hashtable options)
+        {
+            using var reader = new JsonTextReader(new StringReader(JsonSerializer.Serialize(options)))
+            {
+                DateParseHandling = DateParseHandling.None,
+            };
+            return JObject.Load(reader);
         }
 
         /// <inheritdoc />

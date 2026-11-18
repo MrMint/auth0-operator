@@ -1,0 +1,97 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: auth0roles.kubernetes.auth0.com
+spec:
+  group: kubernetes.auth0.com
+  names:
+    kind: Auth0Role
+    listKind: Auth0RoleList
+    plural: auth0roles
+    shortNames:
+    - a0role
+    singular: auth0role
+  scope: Namespaced
+  versions:
+  - name: v1
+    schema:
+      openAPIV3Schema:
+        properties:
+          status:
+            properties:
+              id:
+                nullable: true
+                type: string
+              lastConf:
+                nullable: true
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
+            type: object
+          spec:
+            properties:
+              policy:
+                items:
+                  enum:
+                  - Create
+                  - Update
+                  - Delete
+                  type: string
+                nullable: true
+                type: array
+              tenantRef:
+                nullable: true
+                properties:
+                  namespace:
+                    nullable: true
+                    type: string
+                  name:
+                    nullable: true
+                    type: string
+                required:
+                - name
+                type: object
+              find:
+                nullable: true
+                properties:
+                  id:
+                    nullable: true
+                    type: string
+                  nameFilter:
+                    nullable: true
+                    type: string
+                type: object
+              init:
+                nullable: true
+                properties:
+                  id:
+                    nullable: true
+                    type: string
+                  name:
+                    nullable: true
+                    type: string
+                  description:
+                    nullable: true
+                    type: string
+                type: object
+              conf:
+                nullable: true
+                properties:
+                  id:
+                    nullable: true
+                    type: string
+                  name:
+                    nullable: true
+                    type: string
+                  description:
+                    nullable: true
+                    type: string
+                type: object
+            required:
+            - tenantRef
+            - conf
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

@@ -1,0 +1,425 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: logstreams.kubernetes.auth0.com
+spec:
+  group: kubernetes.auth0.com
+  names:
+    kind: LogStream
+    listKind: LogStreamList
+    plural: logstreams
+    shortNames:
+    - a0ls
+    singular: logstream
+  scope: Namespaced
+  versions:
+  - name: v1
+    schema:
+      openAPIV3Schema:
+        properties:
+          status:
+            properties:
+              id:
+                nullable: true
+                type: string
+              currentStatus:
+                nullable: true
+                type: string
+              type:
+                nullable: true
+                type: string
+              awsPartnerEventSource:
+                nullable: true
+                type: string
+              azurePartnerTopic:
+                nullable: true
+                type: string
+              lastConf:
+                nullable: true
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
+            type: object
+          spec:
+            properties:
+              policy:
+                items:
+                  enum:
+                  - Create
+                  - Update
+                  - Delete
+                  type: string
+                nullable: true
+                type: array
+              tenantRef:
+                nullable: true
+                properties:
+                  namespace:
+                    nullable: true
+                    type: string
+                  name:
+                    nullable: true
+                    type: string
+                required:
+                - name
+                type: object
+              find:
+                nullable: true
+                properties:
+                  id:
+                    nullable: true
+                    type: string
+                  name:
+                    nullable: true
+                    type: string
+                type: object
+              init:
+                nullable: true
+                properties:
+                  name:
+                    nullable: true
+                    type: string
+                  type:
+                    nullable: true
+                    type: string
+                  status:
+                    nullable: true
+                    type: string
+                  filters:
+                    items:
+                      properties:
+                        type:
+                          nullable: true
+                          type: string
+                        name:
+                          nullable: true
+                          type: string
+                      type: object
+                    nullable: true
+                    type: array
+                  sink:
+                    nullable: true
+                    properties:
+                      http:
+                        nullable: true
+                        properties:
+                          httpEndpoint:
+                            nullable: true
+                            type: string
+                          httpContentType:
+                            nullable: true
+                            type: string
+                          httpContentFormat:
+                            nullable: true
+                            type: string
+                          httpAuthorizationSecretRef:
+                            nullable: true
+                            properties:
+                              name:
+                                nullable: true
+                                type: string
+                              key:
+                                nullable: true
+                                type: string
+                            type: object
+                          httpCustomHeaders:
+                            items:
+                              properties:
+                                name:
+                                  nullable: true
+                                  type: string
+                                value:
+                                  nullable: true
+                                  type: string
+                              type: object
+                            nullable: true
+                            type: array
+                        type: object
+                      eventBridge:
+                        nullable: true
+                        properties:
+                          awsAccountId:
+                            nullable: true
+                            type: string
+                          awsRegion:
+                            nullable: true
+                            type: string
+                        type: object
+                      eventGrid:
+                        nullable: true
+                        properties:
+                          azureSubscriptionId:
+                            nullable: true
+                            type: string
+                          azureResourceGroup:
+                            nullable: true
+                            type: string
+                          azureRegion:
+                            nullable: true
+                            type: string
+                          azurePartnerTopic:
+                            nullable: true
+                            type: string
+                        type: object
+                      datadog:
+                        nullable: true
+                        properties:
+                          datadogRegion:
+                            nullable: true
+                            type: string
+                          datadogApiKeySecretRef:
+                            nullable: true
+                            properties:
+                              name:
+                                nullable: true
+                                type: string
+                              key:
+                                nullable: true
+                                type: string
+                            type: object
+                        type: object
+                      splunk:
+                        nullable: true
+                        properties:
+                          splunkDomain:
+                            nullable: true
+                            type: string
+                          splunkPort:
+                            nullable: true
+                            type: string
+                          splunkTokenSecretRef:
+                            nullable: true
+                            properties:
+                              name:
+                                nullable: true
+                                type: string
+                              key:
+                                nullable: true
+                                type: string
+                            type: object
+                          splunkSecure:
+                            nullable: true
+                            type: boolean
+                        type: object
+                      sumo:
+                        nullable: true
+                        properties:
+                          sumoSourceAddress:
+                            nullable: true
+                            type: string
+                        type: object
+                      mixpanel:
+                        nullable: true
+                        properties:
+                          mixpanelRegion:
+                            nullable: true
+                            type: string
+                          mixpanelProjectId:
+                            nullable: true
+                            type: string
+                          mixpanelServiceAccountSecretRef:
+                            nullable: true
+                            properties:
+                              name:
+                                nullable: true
+                                type: string
+                              key:
+                                nullable: true
+                                type: string
+                            type: object
+                        type: object
+                      segment:
+                        nullable: true
+                        properties:
+                          segmentWriteKeySecretRef:
+                            nullable: true
+                            properties:
+                              name:
+                                nullable: true
+                                type: string
+                              key:
+                                nullable: true
+                                type: string
+                            type: object
+                        type: object
+                    type: object
+                type: object
+              conf:
+                nullable: true
+                properties:
+                  name:
+                    nullable: true
+                    type: string
+                  type:
+                    nullable: true
+                    type: string
+                  status:
+                    nullable: true
+                    type: string
+                  filters:
+                    items:
+                      properties:
+                        type:
+                          nullable: true
+                          type: string
+                        name:
+                          nullable: true
+                          type: string
+                      type: object
+                    nullable: true
+                    type: array
+                  sink:
+                    nullable: true
+                    properties:
+                      http:
+                        nullable: true
+                        properties:
+                          httpEndpoint:
+                            nullable: true
+                            type: string
+                          httpContentType:
+                            nullable: true
+                            type: string
+                          httpContentFormat:
+                            nullable: true
+                            type: string
+                          httpAuthorizationSecretRef:
+                            nullable: true
+                            properties:
+                              name:
+                                nullable: true
+                                type: string
+                              key:
+                                nullable: true
+                                type: string
+                            type: object
+                          httpCustomHeaders:
+                            items:
+                              properties:
+                                name:
+                                  nullable: true
+                                  type: string
+                                value:
+                                  nullable: true
+                                  type: string
+                              type: object
+                            nullable: true
+                            type: array
+                        type: object
+                      eventBridge:
+                        nullable: true
+                        properties:
+                          awsAccountId:
+                            nullable: true
+                            type: string
+                          awsRegion:
+                            nullable: true
+                            type: string
+                        type: object
+                      eventGrid:
+                        nullable: true
+                        properties:
+                          azureSubscriptionId:
+                            nullable: true
+                            type: string
+                          azureResourceGroup:
+                            nullable: true
+                            type: string
+                          azureRegion:
+                            nullable: true
+                            type: string
+                          azurePartnerTopic:
+                            nullable: true
+                            type: string
+                        type: object
+                      datadog:
+                        nullable: true
+                        properties:
+                          datadogRegion:
+                            nullable: true
+                            type: string
+                          datadogApiKeySecretRef:
+                            nullable: true
+                            properties:
+                              name:
+                                nullable: true
+                                type: string
+                              key:
+                                nullable: true
+                                type: string
+                            type: object
+                        type: object
+                      splunk:
+                        nullable: true
+                        properties:
+                          splunkDomain:
+                            nullable: true
+                            type: string
+                          splunkPort:
+                            nullable: true
+                            type: string
+                          splunkTokenSecretRef:
+                            nullable: true
+                            properties:
+                              name:
+                                nullable: true
+                                type: string
+                              key:
+                                nullable: true
+                                type: string
+                            type: object
+                          splunkSecure:
+                            nullable: true
+                            type: boolean
+                        type: object
+                      sumo:
+                        nullable: true
+                        properties:
+                          sumoSourceAddress:
+                            nullable: true
+                            type: string
+                        type: object
+                      mixpanel:
+                        nullable: true
+                        properties:
+                          mixpanelRegion:
+                            nullable: true
+                            type: string
+                          mixpanelProjectId:
+                            nullable: true
+                            type: string
+                          mixpanelServiceAccountSecretRef:
+                            nullable: true
+                            properties:
+                              name:
+                                nullable: true
+                                type: string
+                              key:
+                                nullable: true
+                                type: string
+                            type: object
+                        type: object
+                      segment:
+                        nullable: true
+                        properties:
+                          segmentWriteKeySecretRef:
+                            nullable: true
+                            properties:
+                              name:
+                                nullable: true
+                                type: string
+                              key:
+                                nullable: true
+                                type: string
+                            type: object
+                        type: object
+                    type: object
+                type: object
+            required:
+            - tenantRef
+            - conf
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
